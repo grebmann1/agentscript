@@ -13,6 +13,23 @@ import type { EditorSelection } from './source';
 // Create a custom ID generator with 8 character length
 const createId = init({ length: 8 });
 
+/**
+ * User-defined tool mock used by the Simulator. Each mock maps a full tool
+ * URI (e.g. "fn://search_flights") to a JSON response returned in place of
+ * calling the real adapter.
+ */
+export interface ToolMock {
+  id: string;
+  /** Exact target URI the runtime will dispatch against. */
+  target: string;
+  /**
+   * JSON response as typed by the user (string, not pre-parsed, so editor
+   * round-trips don't reformat and invalid JSON can be shown in-place).
+   */
+  responseJson: string;
+  enabled: boolean;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -21,6 +38,8 @@ export interface Agent {
   lastModified: Date;
   createdAt: Date;
   editorSelection?: EditorSelection; // Optional - cursor position and selection
+  /** Per-agent Simulator tool mocks. */
+  mocks?: ToolMock[];
 }
 
 interface AgentState {
@@ -176,6 +195,7 @@ export const useAgentStore = create<AgentStore>()(
           lastModified: string;
           createdAt: string;
           editorSelection?: EditorSelection;
+          mocks?: ToolMock[];
         }
 
         interface PersistedState {

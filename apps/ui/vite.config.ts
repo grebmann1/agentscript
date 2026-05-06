@@ -89,7 +89,8 @@ export default defineConfig({
     hmr: {
       port: 27401,
     },
-    port: 27002,
+    port: 27003,
+    strictPort: true,
     // Uncomment to enable API proxy when deploying with a backend server.
     // proxy: {
     //   '/api': {

@@ -48,6 +48,8 @@ export default [
             'packages/lsp/src/providers/*.test.ts',
             'packages/lsp-server/src/*.test.ts',
             'packages/parser-javascript/test/*.test.ts',
+            'packages/runtime/test/*.test.ts',
+            'packages/runtime-vercel/test/*.test.ts',
           ],
           maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 40,
         },

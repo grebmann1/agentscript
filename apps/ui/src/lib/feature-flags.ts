@@ -14,11 +14,11 @@ export const featureFlags = {
   /** Builder UI (/builder routes) — visual form editor, disabled by default */
   builder: false,
   /** Simulate page (/simulate route) */
-  simulate: false,
+  simulate: true,
   /** UI Theme switcher (IDE / Visual) in settings menu */
   uiThemeSwitcher: false,
   /** Settings dialog */
-  settingsDialog: false,
+  settingsDialog: true,
   /** AI Suggestions tab in bottom panel */
   suggestionsTab: false,
 } as const;

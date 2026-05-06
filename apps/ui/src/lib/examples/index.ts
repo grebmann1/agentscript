@@ -10,6 +10,7 @@ import weather from './weather.agent?raw';
 import caseEscalation from './case_escalation_bot.agent?raw';
 import orderTracking from './order_tracking_assistant.agent?raw';
 import leadQualification from './lead_qualification_bot.agent?raw';
+import travelConcierge from './travel_concierge_playground.agent?raw';
 
 export interface ExampleScript {
   name: string;
@@ -18,6 +19,12 @@ export interface ExampleScript {
 }
 
 export const EXAMPLE_SCRIPTS: ExampleScript[] = [
+  {
+    name: 'Travel Concierge (Playground)',
+    description:
+      'Multi-subagent demo with mocked flight/hotel/weather tools — runs end-to-end in the Simulator.',
+    content: travelConcierge,
+  },
   {
     name: 'Hello World',
     description: 'A simple greeting agent — good starting point.',

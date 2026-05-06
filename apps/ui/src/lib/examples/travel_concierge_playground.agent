@@ -1,0 +1,326 @@
+# Travel Concierge — Playground Demo
+#
+# A self-contained agent you can run end-to-end in the Simulator with no
+# real APIs. Every `fn://` tool is mocked by the playground runtime so
+# you can see the ReAct loop, state updates, conditional branches, and
+# inter-subagent handoffs in action.
+#
+# Try:
+#   "I want to fly to Tokyo next Friday"
+#   "find me a hotel under $200"
+#   "what's the weather there?"
+#   "book it"
+
+config:
+    agent_name: "Travel_Concierge_Demo"
+    default_agent_user: "concierge@playground.example"
+    description: "A friendly travel concierge that searches flights, hotels, and weather."
+
+language:
+    default_locale: "en_US"
+
+system:
+    instructions: |
+        You are a friendly, efficient travel concierge. Help users plan trips by
+        searching flights, hotels, and weather. Be concise. Never invent prices
+        or flight numbers — only report what the tools return.
+    messages:
+        welcome: "Hi! I'm your travel concierge. Where would you like to go?"
+        error: "Something went wrong. Let's try again."
+
+variables:
+    # What we know about the trip
+    destination: mutable string = ""
+        description: "City the user wants to visit"
+    travel_date: mutable string = ""
+        description: "Date the user wants to travel (any format)"
+    budget: mutable number = 0
+        description: "Hotel budget per night in USD"
+
+    # Tool results
+    flight_price: mutable number = 0
+        description: "Price of the best flight we found, in USD"
+    flight_number: mutable string = ""
+        description: "Flight number we found"
+    hotel_name: mutable string = ""
+        description: "Name of the hotel we found"
+    hotel_price: mutable number = 0
+        description: "Nightly hotel price in USD"
+    weather_summary: mutable string = ""
+        description: "One-sentence weather summary for the destination"
+
+    # Booking state
+    booked: mutable boolean = False
+        description: "Whether the user has confirmed a booking"
+
+    # Session bookkeeping (filled in by before_reasoning hooks)
+    turn_count: mutable number = 0
+        description: "Number of turns processed in the concierge subagent"
+    greeted: mutable boolean = False
+        description: "Whether we've greeted the user yet"
+    last_visited: mutable string = ""
+        description: "Name of the last specialist visited"
+
+
+start_agent concierge:
+    description: "Main concierge — gathers trip details and routes to specialists"
+
+    # before_reasoning runs BEFORE the LLM reasoning loop, once per turn.
+    # Great place for bookkeeping, auto-routing, and auto-kicking off work
+    # when the state already has everything needed.
+    before_reasoning:
+        # Bump a simple turn counter — shows up in `state-change` events.
+        set @variables.turn_count = @variables.turn_count + 1
+
+        # Branching greeting flag: flip it once, never again.
+        if @variables.greeted == False:
+            set @variables.greeted = True
+
+        # Auto-advance: if the user already has both flight and hotel and
+        # hasn't booked yet, fast-track them into the booking subagent on
+        # this turn instead of asking one more question.
+        if @variables.flight_number != "" and @variables.hotel_name != "" and @variables.booked == False:
+            transition to @subagent.booking
+
+    reasoning:
+        instructions: ->
+            |   Welcome the user if they haven't said hello yet. Figure out their
+                destination, when they want to travel, and their budget if they
+                mention one. Store what you learn via {!@actions.update_trip}.
+
+                Once you know the destination, offer to search flights
+                ({!@actions.find_flights}), hotels ({!@actions.find_hotel}), or
+                check the weather ({!@actions.check_weather}).
+
+                If the user says "book it" or equivalent, transition via
+                {!@actions.book_trip}.
+
+                If the user is frustrated, asks for a human, or says something
+                like "this isn't working", call {!@actions.escalate_to_human}.
+
+                If the user says "goodbye", "we're done", or otherwise wraps
+                up the conversation, call {!@actions.end_chat}.
+
+                Current trip: destination={! @variables.destination }, date={! @variables.travel_date }, budget=${! @variables.budget }.
+                Turn {! @variables.turn_count } · last specialist visited: {! @variables.last_visited }.
+        actions:
+            # @utils.setVariables is a built-in slot-filling action — the LLM
+            # infers values from the conversation and writes them directly.
+            update_trip: @utils.setVariables
+                description: "Capture the user's destination, travel date, and optional budget."
+                with destination=...
+                with travel_date=...
+                with budget=...
+
+            find_flights: @utils.transition to @subagent.flight_search
+                description: "Search for flights to the destination"
+                available when @variables.destination != ""
+
+            find_hotel: @utils.transition to @subagent.hotel_search
+                description: "Search for hotels at the destination"
+                available when @variables.destination != ""
+
+            check_weather: @utils.transition to @subagent.weather
+                description: "Check the weather at the destination"
+                available when @variables.destination != ""
+
+            book_trip: @utils.transition to @subagent.booking
+                description: "Finalize and book the trip"
+                available when @variables.flight_number != "" and @variables.hotel_name != ""
+
+            # Built-in terminal actions. Both end the turn; escalate signals
+            # the host to hand off to a human, end_chat signals a clean close.
+            escalate_to_human: @utils.escalate
+                description: "Hand off to a human agent"
+
+            end_chat: @utils.end_session
+                description: "End the conversation cleanly"
+
+
+subagent flight_search:
+    description: "Searches flights and reports the best option"
+
+    actions:
+        Search_Flights:
+            description: "Search flights to a destination on a given date"
+            inputs:
+                destination: string
+                    description: "Destination city"
+                    is_required: True
+                travel_date: string
+                    description: "Travel date (can be fuzzy)"
+                    is_required: False
+            outputs:
+                flight_number: string
+                    description: "Flight number of the best option"
+                price_usd: number
+                    description: "Price of the best option in USD"
+                carrier: string
+                    description: "Airline carrier"
+            target: "fn://search_flights"
+
+    before_reasoning:
+        # Remember where we are for the concierge's next turn.
+        set @variables.last_visited = "flight_search"
+
+        # Only fetch when we have a destination AND haven't already done so.
+        # The else arm is just a state tag so the event timeline shows both
+        # branches exercising.
+        if @variables.destination != "" and @variables.flight_number == "":
+            run @actions.Search_Flights
+                with destination=@variables.destination
+                with travel_date=@variables.travel_date
+                set @variables.flight_number = @outputs.flight_number
+                set @variables.flight_price = @outputs.price_usd
+
+    reasoning:
+        instructions: ->
+            |   Present the flight we found:
+                - Flight: {! @variables.flight_number }
+                - Price: ${! @variables.flight_price }
+                - Destination: {! @variables.destination }
+
+                Then ask if they want to check hotels or weather.
+        actions:
+            find_hotel: @utils.transition to @subagent.hotel_search
+                description: "Search a hotel for this trip"
+            check_weather: @utils.transition to @subagent.weather
+                description: "Check weather at destination"
+            back_to_main: @utils.transition to @subagent.concierge
+                description: "Back to the main concierge"
+
+
+subagent hotel_search:
+    description: "Searches hotels, filtered by budget when provided"
+
+    actions:
+        Search_Hotels:
+            description: "Search hotels at a destination within a nightly budget"
+            inputs:
+                destination: string
+                    description: "Destination city"
+                    is_required: True
+                max_price_usd: number
+                    description: "Max nightly rate; 0 means no limit"
+                    is_required: False
+            outputs:
+                hotel_name: string
+                    description: "Name of the recommended hotel"
+                nightly_usd: number
+                    description: "Nightly rate in USD"
+                rating: number
+                    description: "Rating out of 5"
+            target: "fn://search_hotels"
+
+    before_reasoning:
+        set @variables.last_visited = "hotel_search"
+
+        if @variables.destination != "" and @variables.hotel_name == "":
+            run @actions.Search_Hotels
+                with destination=@variables.destination
+                with max_price_usd=@variables.budget
+                set @variables.hotel_name = @outputs.hotel_name
+                set @variables.hotel_price = @outputs.nightly_usd
+
+    reasoning:
+        instructions: ->
+            |   Summarize the hotel we picked:
+                - Hotel: {! @variables.hotel_name }
+                - Nightly rate: ${! @variables.hotel_price }
+                - Destination: {! @variables.destination }
+
+                If the user set a budget ({! @variables.budget }), confirm the hotel fits.
+                Offer next steps: flights, weather, or booking.
+        actions:
+            find_flights: @utils.transition to @subagent.flight_search
+                description: "Search flights for this trip"
+            check_weather: @utils.transition to @subagent.weather
+                description: "Check weather at destination"
+            book_trip: @utils.transition to @subagent.booking
+                description: "Book this trip"
+                available when @variables.flight_number != "" and @variables.hotel_name != ""
+            back_to_main: @utils.transition to @subagent.concierge
+                description: "Back to the main concierge"
+
+
+subagent weather:
+    description: "Reports the weather at the trip destination"
+
+    actions:
+        Get_Weather:
+            description: "Get a short weather summary for a city"
+            inputs:
+                city: string
+                    description: "City name"
+                    is_required: True
+            outputs:
+                summary: string
+                    description: "Short human-readable weather summary"
+                temp_c: number
+                    description: "Temperature in Celsius"
+            target: "fn://get_weather"
+
+    before_reasoning:
+        set @variables.last_visited = "weather"
+
+        if @variables.destination != "":
+            run @actions.Get_Weather
+                with city=@variables.destination
+                set @variables.weather_summary = @outputs.summary
+
+    reasoning:
+        instructions: ->
+            |   Tell the user the weather at {! @variables.destination }:
+                {! @variables.weather_summary }
+
+                Then offer flights, hotels, or to return to the main concierge.
+        actions:
+            find_flights: @utils.transition to @subagent.flight_search
+                description: "Find flights"
+            find_hotel: @utils.transition to @subagent.hotel_search
+                description: "Find hotels"
+            back_to_main: @utils.transition to @subagent.concierge
+                description: "Back to the main concierge"
+
+
+subagent booking:
+    description: "Confirms and books the trip"
+
+    actions:
+        Confirm_Booking:
+            description: "Confirm and book flight + hotel"
+            inputs:
+                flight_number: string
+                    description: "Flight number to book"
+                    is_required: True
+                hotel_name: string
+                    description: "Hotel to reserve"
+                    is_required: True
+            outputs:
+                confirmation_code: string
+                    description: "Booking confirmation code"
+                total_usd: number
+                    description: "Total charge in USD"
+            target: "fn://confirm_booking"
+
+    before_reasoning:
+        set @variables.last_visited = "booking"
+
+        if @variables.flight_number != "" and @variables.hotel_name != "" and @variables.booked == False:
+            run @actions.Confirm_Booking
+                with flight_number=@variables.flight_number
+                with hotel_name=@variables.hotel_name
+                set @variables.booked = True
+
+    reasoning:
+        instructions: ->
+            |   Confirm the booking to the user:
+                - Destination: {! @variables.destination }
+                - Flight: {! @variables.flight_number } (${! @variables.flight_price })
+                - Hotel: {! @variables.hotel_name } (${! @variables.hotel_price }/night)
+
+                Thank them and suggest they return to the main concierge for
+                another trip.
+        actions:
+            back_to_main: @utils.transition to @subagent.concierge
+                description: "Plan another trip"

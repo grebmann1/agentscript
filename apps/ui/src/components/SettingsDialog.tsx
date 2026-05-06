@@ -13,7 +13,11 @@ import {
   DialogTitle,
 } from '~/components/ui/dialog';
 import { Badge } from '~/components/ui/badge';
+import { Button } from '~/components/ui/button';
+import { Input } from '~/components/ui/input';
+import { Label } from '~/components/ui/label';
 import { cn } from '~/lib/utils';
+import { useLlmSettingsStore } from '~/store/llmSettings';
 declare const __AGENTSCRIPT_PACKAGE_VERSIONS__: Record<string, string>;
 const packageVersions = __AGENTSCRIPT_PACKAGE_VERSIONS__;
 
@@ -22,10 +26,11 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type SettingsSection = 'version' | 'general';
+type SettingsSection = 'version' | 'general' | 'llm';
 
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'general', label: 'General' },
+  { id: 'llm', label: 'LLM Endpoint' },
   { id: 'version', label: 'Version' },
 ];
 
@@ -88,6 +93,8 @@ export function SettingsDialogContent() {
             </div>
           )}
 
+          {activeSection === 'llm' && <LlmSettingsSection />}
+
           {activeSection === 'version' && (
             <div className="space-y-6">
               <div>
@@ -119,5 +126,103 @@ export function SettingsDialogContent() {
         </div>
       </div>
     </DialogContent>
+  );
+}
+
+/** Settings section for the Simulator's BYO OpenAI-compatible LLM endpoint. */
+function LlmSettingsSection() {
+  const { baseUrl, apiKey, model, setSettings, clear } = useLlmSettingsStore();
+  const [local, setLocal] = useState({ baseUrl, apiKey, model });
+  const dirty =
+    local.baseUrl !== baseUrl ||
+    local.apiKey !== apiKey ||
+    local.model !== model;
+
+  const handleSave = () => {
+    setSettings({
+      baseUrl: local.baseUrl.trim(),
+      apiKey: local.apiKey.trim(),
+      model: local.model.trim(),
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-1">LLM Endpoint</h3>
+        <p className="text-sm text-muted-foreground">
+          Configure the OpenAI-compatible endpoint used by the Simulator.
+        </p>
+      </div>
+
+      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+        <strong>Warning:</strong> The API key is stored in your browser&apos;s
+        localStorage and sent directly from the browser to the endpoint. This is
+        fine for local experimentation but not safe for production or shared
+        machines.
+      </div>
+
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="llm-base-url">Base URL</Label>
+          <Input
+            id="llm-base-url"
+            placeholder="https://api.openai.com/v1"
+            value={local.baseUrl}
+            onChange={e =>
+              setLocal(prev => ({ ...prev, baseUrl: e.target.value }))
+            }
+          />
+          <p className="text-xs text-muted-foreground">
+            Any OpenAI-compatible endpoint (OpenAI, LiteLLM, vLLM, custom
+            gateway, …).
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="llm-api-key">API Key</Label>
+          <Input
+            id="llm-api-key"
+            type="password"
+            placeholder="sk-..."
+            value={local.apiKey}
+            onChange={e =>
+              setLocal(prev => ({ ...prev, apiKey: e.target.value }))
+            }
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="llm-model">Model</Label>
+          <Input
+            id="llm-model"
+            placeholder="gpt-4o-mini"
+            value={local.model}
+            onChange={e =>
+              setLocal(prev => ({ ...prev, model: e.target.value }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 pt-2">
+        <Button onClick={handleSave} disabled={!dirty}>
+          Save
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            clear();
+            setLocal({
+              baseUrl: 'https://api.openai.com/v1',
+              apiKey: '',
+              model: 'gpt-4o-mini',
+            });
+          }}
+        >
+          Reset
+        </Button>
+      </div>
+    </div>
   );
 }
