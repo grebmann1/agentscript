@@ -1,0 +1,48 @@
+{
+  "name": "@agentscript/runtime",
+  "version": "0.1.0",
+  "description": "Lightweight TypeScript runtime for AgentScript — executes the AgentDSLAuthoring IR emitted by @agentscript/compiler.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": {
+        "types": "./src/index.ts",
+        "import": "./src/index.ts"
+      },
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@agentscript/compiler": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentscript/agentforce": "workspace:*",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "agentscript",
+    "runtime",
+    "agent"
+  ],
+  "author": {
+    "name": "AgentScript Team",
+    "email": "agentscript@salesforce.com"
+  },
+  "license": "MIT"
+}

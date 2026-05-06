@@ -1,0 +1,550 @@
+/*
+ * Copyright (c) 2026, Salesforce, Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type { AgentDSLAuthoring, SubAgentNode } from '@agentscript/compiler';
+import { loadGraph, type LoadedGraph } from '../graph/load.js';
+import { StateStore } from '../state/store.js';
+import {
+  EventBus,
+  type EventListener,
+  type RuntimeEvent,
+} from '../events/types.js';
+import { ToolRegistry } from '../tools/registry.js';
+import {
+  runSteps,
+  makeScope,
+  evalBoundValue,
+  isEnabled,
+  type Step,
+} from '../steps/run-steps.js';
+import { renderTemplate } from '../template/render.js';
+import type { LlmDriver, Msg, ToolCall, ToolDef } from '../llm/types.js';
+
+export interface RuntimeOptions {
+  doc: AgentDSLAuthoring;
+  llm: LlmDriver;
+  tools: ToolRegistry;
+  /** Seed values for linked (Context) variables. */
+  context?: Record<string, unknown>;
+  /** Guard against infinite tool-call/handoff loops. */
+  maxStepsPerTurn?: number;
+}
+
+export interface TurnResult {
+  /** Accumulated assistant text for this turn. */
+  assistantText: string;
+  /** The node the agent ended the turn on. */
+  finalNode: string;
+  /** All events emitted during the turn (also streamed via `on`). */
+  events: RuntimeEvent[];
+}
+
+export class Runtime {
+  readonly graph: LoadedGraph;
+  readonly state: StateStore;
+  readonly bus = new EventBus();
+  private readonly history: Msg[] = [];
+  private currentNode: string;
+  private readonly maxSteps: number;
+
+  constructor(private readonly opts: RuntimeOptions) {
+    this.graph = loadGraph(opts.doc);
+    this.state = new StateStore(
+      this.graph.stateVars,
+      opts.context ?? {},
+      this.bus
+    );
+    this.currentNode = this.graph.initialNode;
+    this.maxSteps = opts.maxStepsPerTurn ?? 8;
+  }
+
+  on(listener: EventListener): () => void {
+    return this.bus.on(listener);
+  }
+
+  /** Drive one user turn through the ReAct loop. */
+  async turn(userInput: string): Promise<TurnResult> {
+    const collected: RuntimeEvent[] = [];
+    const off = this.bus.on(e => collected.push(e));
+
+    try {
+      this.history.push({ role: 'user', content: userInput });
+      this.bus.emit({ kind: 'turn-start', node: this.currentNode });
+
+      let assistantText = '';
+      let steps = 0;
+
+      // Outer loop: one iteration per node-entry. A handoff (from
+      // before_reasoning, after_all_tool_calls, after_reasoning, or an
+      // after_reasoning transition) swaps `currentNode` and continues.
+      outer: while (true) {
+        const node = this.requireNode(this.currentNode);
+        this.bus.emit({ kind: 'node-enter', node: node.developer_name });
+
+        // Per-node resolution of tools + action refs (compiled IR stores tool
+        // targets as action developer_names; the full `scheme://name` URI lives
+        // on the matching action_definition). Hook steps and tool-slot bindings
+        // both route through this resolver.
+        const actionUris = buildActionUriMap(node);
+        const nodeTools = this.buildToolDefs(node, actionUris);
+        const resolveTarget = (ref: string): string => {
+          if (ref.includes('://') || ref === '__state_update_action__')
+            return ref;
+          return actionUris.get(ref) ?? ref;
+        };
+        const baseStepOpts = {
+          state: this.state,
+          tools: this.opts.tools,
+          bus: this.bus,
+          resolveTarget,
+        };
+
+        // 1. before_reasoning (runs once per node entry)
+        const preSteps = node.before_reasoning as Step[] | null;
+        if (preSteps && preSteps.length > 0) {
+          this.bus.emit({
+            kind: 'phase-start',
+            node: node.developer_name,
+            phase: 'before_reasoning',
+          });
+        }
+        const preOutcome = await runSteps(preSteps, baseStepOpts);
+        if (preSteps && preSteps.length > 0) {
+          this.bus.emit({
+            kind: 'phase-end',
+            node: node.developer_name,
+            phase: 'before_reasoning',
+          });
+        }
+        if (preOutcome.handoffTo) {
+          this.currentNode = preOutcome.handoffTo;
+          if (++steps > this.maxSteps) break;
+          continue;
+        }
+
+        // 2. Reasoning loop: LLM step → (tool calls? dispatch then loop)
+        //                              → (no tool calls? done, run after_*)
+        let loopHandoff: string | undefined;
+        reasoning: while (true) {
+          // before_reasoning_iteration — runs at the top of each LLM iteration
+          const iterSteps = node.before_reasoning_iteration as Step[] | null;
+          if (iterSteps && iterSteps.length > 0) {
+            this.bus.emit({
+              kind: 'phase-start',
+              node: node.developer_name,
+              phase: 'before_reasoning_iteration',
+            });
+          }
+          await runSteps(iterSteps, baseStepOpts);
+          if (iterSteps && iterSteps.length > 0) {
+            this.bus.emit({
+              kind: 'phase-end',
+              node: node.developer_name,
+              phase: 'before_reasoning_iteration',
+            });
+          }
+
+          const system = this.buildSystemPrompt(node);
+          // Filter tools by their `enabled` guard (the compiler's
+          // `available when` clause). This is what prevents the LLM from
+          // seeing, e.g., a transition whose preconditions aren't met yet.
+          const enableScope = makeScope(this.state);
+          const visibleTools = nodeTools.filter(t =>
+            isEnabled(t.enabled, enableScope)
+          );
+          for (const skipped of nodeTools) {
+            if (!isEnabled(skipped.enabled, enableScope)) {
+              this.bus.emit({
+                kind: 'action-skipped',
+                name: skipped.name,
+                reason: `available-when guard failed: ${String(skipped.enabled)}`,
+              });
+            }
+          }
+          // Every tool slot — including `__state_update_action__`-backed
+          // transitions and setVariables — must be exposed to the LLM.
+          // That sentinel tells the runtime "no real adapter call, apply
+          // state_updates inline", NOT "hide from the model". The LLM has
+          // to see these tools to emit the tool-call that fires them.
+          this.bus.emit({
+            kind: 'phase-start',
+            node: node.developer_name,
+            phase: 'reasoning',
+          });
+          const turn = await this.runLlmStep(
+            system,
+            visibleTools.map(stripInternal)
+          );
+          this.bus.emit({
+            kind: 'phase-end',
+            node: node.developer_name,
+            phase: 'reasoning',
+          });
+
+          assistantText += turn.text;
+
+          if (turn.toolCalls.length === 0) {
+            // LLM is done talking → push a plain assistant message and exit.
+            if (turn.text)
+              this.history.push({ role: 'assistant', content: turn.text });
+            break reasoning;
+          }
+
+          // The model emitted tool calls. Push a single assistant message
+          // that carries both the text (if any) and the tool_calls, so the
+          // provider sees a valid tool_calls → tool_result handshake.
+          this.history.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: turn.toolCalls,
+          });
+
+          let sessionEnded = false;
+          for (const call of turn.toolCalls) {
+            const outcome = await this.dispatchToolCall(call, nodeTools);
+            if (outcome.endSession) {
+              sessionEnded = true;
+              break;
+            }
+            if (++steps > this.maxSteps) break outer;
+          }
+          if (sessionEnded) {
+            // @utils.end_session fired — stop everything for this turn.
+            break outer;
+          }
+
+          // Escalation: @utils.escalate sets AgentScriptInternal_next_topic
+          // to '__human__'. Surface as a terminal event and stop the turn.
+          if (
+            this.state.get('AgentScriptInternal_next_topic') === '__human__'
+          ) {
+            this.bus.emit({ kind: 'end-session' });
+            break outer;
+          }
+
+          // after_all_tool_calls fires after each tool-call round. A handoff
+          // here preempts further reasoning on this node.
+          const afterAllSteps = node.after_all_tool_calls as Step[] | null;
+          if (afterAllSteps && afterAllSteps.length > 0) {
+            this.bus.emit({
+              kind: 'phase-start',
+              node: node.developer_name,
+              phase: 'after_all_tool_calls',
+            });
+          }
+          const afterAll = await runSteps(afterAllSteps, baseStepOpts);
+          if (afterAllSteps && afterAllSteps.length > 0) {
+            this.bus.emit({
+              kind: 'phase-end',
+              node: node.developer_name,
+              phase: 'after_all_tool_calls',
+            });
+          }
+          if (afterAll.handoffTo) {
+            loopHandoff = afterAll.handoffTo;
+            break reasoning;
+          }
+
+          if (++steps > this.maxSteps) break outer;
+          // Otherwise: loop back into the LLM so it can observe the tool
+          // results in chat history and produce the final response.
+        }
+
+        if (loopHandoff) {
+          this.currentNode = loopHandoff;
+          if (++steps > this.maxSteps) break outer;
+          continue;
+        }
+
+        // 3. after_reasoning (runs once per node exit)
+        const afterSteps = node.after_reasoning as Step[] | null;
+        if (afterSteps && afterSteps.length > 0) {
+          this.bus.emit({
+            kind: 'phase-start',
+            node: node.developer_name,
+            phase: 'after_reasoning',
+          });
+        }
+        const after = await runSteps(afterSteps, baseStepOpts);
+        if (afterSteps && afterSteps.length > 0) {
+          this.bus.emit({
+            kind: 'phase-end',
+            node: node.developer_name,
+            phase: 'after_reasoning',
+          });
+        }
+        if (after.handoffTo) {
+          this.currentNode = after.handoffTo;
+          if (++steps > this.maxSteps) break outer;
+          continue;
+        }
+
+        // No handoff → turn ends on this node.
+        break outer;
+      }
+
+      this.bus.emit({ kind: 'turn-end', node: this.currentNode });
+      return { assistantText, finalNode: this.currentNode, events: collected };
+    } finally {
+      off();
+    }
+  }
+
+  // -----------------------------------------------------------------------
+
+  private requireNode(name: string): SubAgentNode {
+    const node = this.graph.nodes.get(name);
+    if (!node) throw new Error(`Subagent "${name}" not found`);
+    return node;
+  }
+
+  private buildSystemPrompt(node: SubAgentNode): string {
+    const scope = makeScope(this.state);
+    const pieces: string[] = [];
+    if (node.instructions) pieces.push(node.instructions);
+    if (node.focus_prompt)
+      pieces.push(renderTemplate(node.focus_prompt, scope));
+    return pieces.filter(Boolean).join('\n\n');
+  }
+
+  private buildToolDefs(
+    node: SubAgentNode,
+    actionUris: Map<string, string>
+  ): Array<
+    ToolDef & {
+      /** Raw target as written in the IR tool slot — usually an action developer_name. */
+      actionRef: string;
+      /** Fully-resolved `scheme://name` URI (or sentinel for state-update). */
+      target: string;
+      /** Raw `enabled` guard expression; evaluated each turn to gate the tool. */
+      enabled?: unknown;
+      bound?: Record<string, unknown>;
+      stateUpdates?: Array<Record<string, unknown>> | null;
+    }
+  > {
+    const tools = node.tools ?? [];
+    // Action definition inputs (for schema).
+    const inputs = new Map<string, unknown[] | undefined>();
+    for (const def of node.action_definitions ?? []) {
+      const d = def as unknown as {
+        developer_name: string;
+        input_type?: unknown[];
+      };
+      inputs.set(d.developer_name, d.input_type);
+    }
+    return tools.map(t => {
+      const asTool = t as unknown as {
+        name?: string;
+        description?: string;
+        target: string;
+        enabled?: unknown;
+        input_parameters?: unknown[];
+        bound_inputs?: Record<string, unknown> | null;
+        state_updates?: Array<Record<string, unknown>> | null;
+      };
+      const name = asTool.name ?? asTool.target;
+      // `target` in a tool slot is the action's developer_name, unless it's
+      // the state-update sentinel or already has a scheme (handoff, etc.).
+      const resolvedTarget =
+        asTool.target.includes('://') ||
+        asTool.target === '__state_update_action__'
+          ? asTool.target
+          : (actionUris.get(asTool.target) ?? asTool.target);
+      const inputParams = asTool.input_parameters ?? inputs.get(asTool.target);
+      return {
+        name,
+        description: asTool.description ?? '',
+        inputSchema: inputSchemaFromParams(inputParams),
+        actionRef: asTool.target,
+        target: resolvedTarget,
+        enabled: asTool.enabled,
+        bound: asTool.bound_inputs ?? undefined,
+        stateUpdates: asTool.state_updates,
+      };
+    });
+  }
+
+  private async runLlmStep(
+    system: string,
+    tools: ToolDef[]
+  ): Promise<{ text: string; toolCalls: ToolCall[] }> {
+    const iter = this.opts.llm.step({
+      system,
+      messages: [...this.history],
+      tools,
+    });
+    let text = '';
+    const toolCalls: ToolCall[] = [];
+    for await (const ev of iter) {
+      if (ev.kind === 'text-delta') {
+        text += ev.text;
+        this.bus.emit({ kind: 'llm-text', text: ev.text });
+      } else if (ev.kind === 'tool-call') {
+        toolCalls.push(ev.call);
+      }
+    }
+    return { text, toolCalls };
+  }
+
+  private async dispatchToolCall(
+    call: ToolCall,
+    tools: Array<
+      ToolDef & {
+        target: string;
+        bound?: Record<string, unknown>;
+        stateUpdates?: Array<Record<string, unknown>> | null;
+      }
+    >
+  ): Promise<{ endSession: boolean }> {
+    const def = tools.find(t => t.name === call.name);
+    if (!def) {
+      this.bus.emit({
+        kind: 'tool-error',
+        name: call.name,
+        error: 'unknown tool',
+      });
+      this.history.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        tool_name: call.name,
+        content: JSON.stringify({ error: 'unknown tool' }),
+      });
+      return { endSession: false };
+    }
+    // Merge compiler-bound args (expression strings that need evaluating)
+    // with LLM-provided args (already literal). Only the bound half goes
+    // through the expression evaluator.
+    const scope = makeScope(this.state);
+    const boundEvaluated: Record<string, unknown> = {};
+    if (def.bound) {
+      for (const [k, raw] of Object.entries(def.bound)) {
+        boundEvaluated[k] = evalBoundValue(raw, scope);
+      }
+    }
+    const args = { ...boundEvaluated, ...call.arguments };
+
+    this.bus.emit({ kind: 'tool-call', name: def.target, args });
+
+    // Compiler-emitted sentinel targets:
+    // - __state_update_action__    @utils.setVariables, transitions, if/set
+    // - __end_session_action__     @utils.end_session
+    // For these the LLM's arguments ARE the payload (there's no adapter
+    // to call), and `end_session` additionally signals turn termination.
+    let result: Record<string, unknown>;
+    let endSession = false;
+    if (def.target === '__state_update_action__') {
+      result = args;
+    } else if (def.target === '__end_session_action__') {
+      result = args;
+      endSession = true;
+    } else {
+      try {
+        result = await this.opts.tools.invoke(def.target, args);
+      } catch (err) {
+        this.bus.emit({
+          kind: 'tool-error',
+          name: def.target,
+          error: String(err),
+        });
+        this.history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          tool_name: call.name,
+          content: JSON.stringify({ error: String(err) }),
+        });
+        return { endSession: false };
+      }
+    }
+    this.bus.emit({ kind: 'tool-result', name: def.target, result });
+
+    // Apply state_updates against the result (so `result.*` refs resolve).
+    if (def.stateUpdates) {
+      const resultScope = makeScope(this.state, result);
+      for (const entry of def.stateUpdates) {
+        for (const [name, raw] of Object.entries(entry)) {
+          this.state.set(name, evalBoundValue(raw, resultScope));
+        }
+      }
+    }
+
+    this.history.push({
+      role: 'tool',
+      tool_call_id: call.id,
+      tool_name: call.name,
+      content: JSON.stringify(result),
+    });
+
+    if (endSession) {
+      this.bus.emit({ kind: 'end-session' });
+    }
+    return { endSession };
+  }
+}
+
+/**
+ * Build `developer_name → scheme://name` map from a node's action_definitions.
+ * Same resolution logic used for tool-slot bindings and hook-invoked actions.
+ */
+function buildActionUriMap(node: SubAgentNode): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const def of node.action_definitions ?? []) {
+    const d = def as unknown as {
+      developer_name: string;
+      invocation_target_type?: string;
+      invocation_target_name?: string;
+    };
+    const scheme = d.invocation_target_type ?? 'fn';
+    const path = d.invocation_target_name ?? d.developer_name;
+    out.set(d.developer_name, `${scheme}://${path}`);
+  }
+  return out;
+}
+
+function stripInternal<T extends { target?: string }>(t: T): T {
+  // Strip runtime-only fields before handing to the LLM driver.
+  const { target: _target, ...rest } = t as unknown as {
+    target?: string;
+  } & Record<string, unknown>;
+  void _target;
+  return rest as T;
+}
+
+function inputSchemaFromParams(params: unknown): Record<string, unknown> {
+  if (!Array.isArray(params)) return { type: 'object', properties: {} };
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const raw of params) {
+    const p = raw as {
+      developer_name?: string;
+      description?: string;
+      data_type?: string;
+      required?: boolean;
+    };
+    if (!p.developer_name) continue;
+    properties[p.developer_name] = {
+      type: dataTypeToJsonType(p.data_type),
+      description: p.description,
+    };
+    if (p.required) required.push(p.developer_name);
+  }
+  return required.length
+    ? { type: 'object', properties, required }
+    : { type: 'object', properties };
+}
+
+function dataTypeToJsonType(t?: string): string {
+  switch ((t ?? '').toLowerCase()) {
+    case 'boolean':
+      return 'boolean';
+    case 'integer':
+    case 'long':
+      return 'integer';
+    case 'double':
+    case 'number':
+      return 'number';
+    default:
+      return 'string';
+  }
+}

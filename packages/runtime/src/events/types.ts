@@ -1,0 +1,46 @@
+/*
+ * Copyright (c) 2026, Salesforce, Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
+ * Named lifecycle phases emitted around each subagent execution. Hosts can
+ * use these to group events in a timeline or to show which hook produced a
+ * given side-effect.
+ */
+export type Phase =
+  | 'before_reasoning'
+  | 'before_reasoning_iteration'
+  | 'reasoning'
+  | 'after_all_tool_calls'
+  | 'after_reasoning';
+
+export type RuntimeEvent =
+  | { kind: 'turn-start'; node: string }
+  | { kind: 'turn-end'; node: string }
+  | { kind: 'node-enter'; node: string }
+  | { kind: 'node-exit'; node: string; to?: string }
+  | { kind: 'phase-start'; node: string; phase: Phase }
+  | { kind: 'phase-end'; node: string; phase: Phase }
+  | { kind: 'state-change'; name: string; before: unknown; after: unknown }
+  | { kind: 'tool-call'; name: string; args: Record<string, unknown> }
+  | { kind: 'tool-result'; name: string; result: unknown }
+  | { kind: 'tool-error'; name: string; error: string }
+  | { kind: 'llm-text'; text: string }
+  | { kind: 'action-skipped'; name: string; reason: string }
+  | { kind: 'end-session' };
+
+export type EventListener = (event: RuntimeEvent) => void;
+
+export class EventBus {
+  private listeners = new Set<EventListener>();
+
+  on(listener: EventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(event: RuntimeEvent): void {
+    for (const l of this.listeners) l(event);
+  }
+}
