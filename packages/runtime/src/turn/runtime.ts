@@ -33,6 +33,15 @@ import { TracingContext } from '../tracing/context.js';
 import type { SpanExporter } from '../tracing/types.js';
 import type { Guardrail, ExhaustionPolicy } from '../guardrails/types.js';
 import { GuardrailExhaustionError } from '../guardrails/types.js';
+import type {
+  DelegationOptions,
+  DelegationFrame,
+  DelegationResult,
+} from '../delegation/types.js';
+import {
+  DelegationTimeoutError,
+  DelegationDepthError,
+} from '../delegation/errors.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
@@ -70,6 +79,8 @@ export interface RuntimeOptions {
   exhaustionPolicy?: ExhaustionPolicy;
   /** Tracing / observability configuration. */
   tracing?: TracingOptions;
+  /** Default options for delegations. */
+  delegation?: DelegationOptions;
 }
 
 export interface TurnOptions {
@@ -97,6 +108,7 @@ export class Runtime {
   private readonly pipeline: MiddlewarePipeline;
   private _inTurn = false;
   private _tracingCtx: TracingContext | null = null;
+  private delegationStack: DelegationFrame[] = [];
 
   constructor(private readonly opts: RuntimeOptions) {
     this.graph = loadGraph(opts.doc);
@@ -152,6 +164,10 @@ export class Runtime {
 
   get currentNodeName(): string {
     return this.currentNode;
+  }
+
+  get delegationDepth(): number {
+    return this.delegationStack.length;
   }
 
   /** Reset usage counters. Pass a tool name to reset one, or omit to reset all. */
@@ -822,6 +838,208 @@ export class Runtime {
     return base;
   }
 
+  /**
+   * Delegate control to a child node. The child runs a separate reasoning loop
+   * and returns its result. State IS shared (child mutations are visible to parent),
+   * but conversation history is isolated.
+   */
+  private async delegate(
+    childNodeName: string,
+    context?: string,
+    signal?: AbortSignal
+  ): Promise<DelegationResult> {
+    // 1. Resolve the child node
+    const childNode = this.graph.nodes.get(childNodeName);
+    if (!childNode) {
+      throw new Error(`Delegation target node "${childNodeName}" not found`);
+    }
+
+    // 2. Check depth limit
+    const defaultOpts = this.opts.delegation ?? {};
+    const maxDepth = defaultOpts.maxDepth ?? 5;
+    if (this.delegationStack.length >= maxDepth) {
+      throw new DelegationDepthError(this.delegationStack.length, maxDepth);
+    }
+
+    // 3. Create frame
+    const maxSteps = defaultOpts.maxSteps ?? 10;
+    const shareHistory = defaultOpts.shareHistory ?? false;
+    const frame: DelegationFrame = {
+      parentNode: this.currentNode,
+      childNode: childNodeName,
+      parentHistory: Object.freeze([...this.history]),
+      depth: this.delegationStack.length + 1,
+      options: {
+        maxSteps,
+        maxDepth,
+        context: context ?? defaultOpts.context ?? '',
+        shareHistory,
+      },
+    };
+
+    // 4. Push frame
+    this.delegationStack.push(frame);
+
+    // 5. Emit delegation-start
+    this.bus.emit({
+      kind: 'delegation-start',
+      parentNode: frame.parentNode,
+      childNode: childNodeName,
+      depth: frame.depth,
+    });
+
+    // Save parent state
+    const savedNode = this.currentNode;
+    const savedHistory = [...this.history];
+
+    // Take a state snapshot before delegation to compute changes afterwards
+    const stateBefore = this.state.snapshot();
+
+    try {
+      // 6. Swap to child context
+      this.currentNode = childNodeName;
+      this.history.length = 0;
+      if (shareHistory) {
+        this.history.push(...savedHistory);
+      }
+      if (context) {
+        this.history.push({
+          role: 'user',
+          content: `[Delegation context: ${context}]`,
+        });
+      }
+
+      // 7. Mini reasoning loop for the child
+      this.traceStart(`delegation:${childNodeName}`, {
+        'delegation.child': childNodeName,
+        'delegation.depth': frame.depth,
+      });
+
+      let assistantText = '';
+      let steps = 0;
+
+      const node = this.requireNode(this.currentNode);
+      const actionUris = buildActionUriMap(node);
+      const nodeTools = this.buildToolDefs(node, actionUris);
+      const resolveTarget = (ref: string): string => {
+        if (ref.includes('://') || ref === '__state_update_action__')
+          return ref;
+        return actionUris.get(ref) ?? ref;
+      };
+      const baseStepOpts = {
+        state: this.state,
+        tools: this.opts.tools,
+        bus: this.bus,
+        resolveTarget,
+      };
+
+      // Run before_reasoning for the child node
+      const preSteps = node.before_reasoning as Step[] | null;
+      await runSteps(preSteps, baseStepOpts);
+
+      // Reasoning loop
+      while (true) {
+        this.throwIfAborted(signal);
+
+        if (steps >= maxSteps) {
+          throw new DelegationTimeoutError(childNodeName, maxSteps, steps);
+        }
+
+        const system = this.buildSystemPrompt(node);
+        const enableScope = makeScope(this.state);
+        const visibleTools = nodeTools
+          .filter(t => isEnabled(t.enabled, enableScope))
+          .filter(t => {
+            if (!this.opts.toolLimits) return true;
+            const limit = this.opts.toolLimits[t.name];
+            if (!limit) return true;
+            return (this.toolCallCounts.get(t.name) ?? 0) < limit.maxCalls;
+          });
+        const effectiveTools: ToolDef[] = visibleTools.map(stripInternal);
+
+        const turn = await this.runLlmStep(system, effectiveTools, signal);
+        steps++;
+
+        assistantText += turn.text;
+
+        if (turn.toolCalls.length === 0) {
+          // Child is done — text-only response
+          if (turn.text) {
+            this.history.push({ role: 'assistant', content: turn.text });
+          }
+          break;
+        }
+
+        // Process tool calls
+        this.history.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: turn.toolCalls,
+        });
+
+        for (const call of turn.toolCalls) {
+          this.throwIfAborted(signal);
+          await this.dispatchToolCall(call, nodeTools, signal);
+        }
+      }
+
+      // Run after_reasoning for the child node
+      const afterSteps = node.after_reasoning as Step[] | null;
+      await runSteps(afterSteps, baseStepOpts);
+
+      this.traceEnd('ok');
+
+      // 8. Collect state changes
+      const stateAfter = this.state.snapshot();
+      const stateChanges: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(stateAfter)) {
+        if (stateBefore[key] !== value) {
+          stateChanges[key] = value;
+        }
+      }
+
+      const result: DelegationResult = {
+        assistantText,
+        stateChanges,
+        finalNode: this.currentNode,
+        steps,
+      };
+
+      // 9. Pop frame
+      this.delegationStack.pop();
+
+      // 10. Restore parent
+      this.currentNode = savedNode;
+      this.history.length = 0;
+      this.history.push(...savedHistory);
+
+      // 11. Emit delegation-end
+      this.bus.emit({
+        kind: 'delegation-end',
+        parentNode: savedNode,
+        childNode: childNodeName,
+        result,
+      });
+
+      // 12. Return result
+      return result;
+    } catch (err) {
+      // Emit delegation-error, restore parent state, re-throw
+      this.traceEnd('error');
+      this.delegationStack.pop();
+      this.currentNode = savedNode;
+      this.history.length = 0;
+      this.history.push(...savedHistory);
+      this.bus.emit({
+        kind: 'delegation-error',
+        parentNode: savedNode,
+        childNode: childNodeName,
+        error: String(err),
+      });
+      throw err;
+    }
+  }
+
   private async dispatchToolCall(
     call: ToolCall,
     tools: Array<
@@ -922,6 +1140,36 @@ export class Runtime {
     } else if (def.target === '__end_session_action__') {
       result = args;
       endSession = true;
+    } else if (
+      def.target.startsWith('delegate://') ||
+      def.target === '__delegate_action__'
+    ) {
+      // Delegation: call-return to a child node
+      const nodeName = def.target.startsWith('delegate://')
+        ? def.target.slice('delegate://'.length)
+        : (args.node as string);
+      const delegationContext = (args.context as string) ?? undefined;
+      try {
+        const delegationResult = await this.delegate(
+          nodeName,
+          delegationContext,
+          signal
+        );
+        result = delegationResult as unknown as Record<string, unknown>;
+      } catch (err) {
+        this.bus.emit({
+          kind: 'tool-error',
+          name: def.target,
+          error: String(err),
+        });
+        this.history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          tool_name: call.name,
+          content: JSON.stringify({ error: String(err) }),
+        });
+        return { endSession: false };
+      }
     } else {
       try {
         result = await this.opts.tools.invoke(def.target, args, { signal });
