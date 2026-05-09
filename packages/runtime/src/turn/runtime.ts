@@ -31,6 +31,8 @@ import {
 import { CheckpointVersionError } from '../checkpoint/errors.js';
 import { TracingContext } from '../tracing/context.js';
 import type { SpanExporter } from '../tracing/types.js';
+import type { Guardrail, ExhaustionPolicy } from '../guardrails/types.js';
+import { GuardrailExhaustionError } from '../guardrails/types.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
@@ -62,6 +64,10 @@ export interface RuntimeOptions {
   toolLimits?: Record<string, ToolUsageLimit>;
   /** Middleware stack. Applied in priority order. */
   middleware?: Middleware[];
+  /** Guardrails to validate LLM output before acting on it. */
+  guardrails?: Guardrail[];
+  /** What to do when guardrail retries are exhausted. Default: 'throw'. */
+  exhaustionPolicy?: ExhaustionPolicy;
   /** Tracing / observability configuration. */
   tracing?: TracingOptions;
 }
@@ -344,6 +350,7 @@ export class Runtime {
           // to see these tools to emit the tool-call that fires them.
           let effectiveSystem = system;
           let effectiveTools: ToolDef[] = visibleTools.map(stripInternal);
+          let middlewareGuardrails: Guardrail[] | undefined;
           if (!this.pipeline.isEmpty) {
             const beforeLlm = await this.pipeline.runBeforeLlmStep({
               node: this.currentNode,
@@ -359,6 +366,8 @@ export class Runtime {
               if (beforeLlm.appendMessages) {
                 for (const m of beforeLlm.appendMessages) this.history.push(m);
               }
+              if (beforeLlm.guardrails)
+                middlewareGuardrails = beforeLlm.guardrails;
             }
           }
 
@@ -368,10 +377,11 @@ export class Runtime {
             node: node.developer_name,
             phase: 'reasoning',
           });
-          const turn = await this.runLlmStep(
+          const turn = await this.runLlmStepWithGuardrails(
             effectiveSystem,
             effectiveTools,
-            signal
+            signal,
+            middlewareGuardrails
           );
           this.bus.emit({
             kind: 'phase-end',
@@ -686,6 +696,130 @@ export class Runtime {
       }
     }
     return { text, toolCalls };
+  }
+
+  /**
+   * Run an LLM step with guardrail validation and retry logic.
+   * If no guardrails are configured, delegates directly to runLlmStep.
+   */
+  private async runLlmStepWithGuardrails(
+    system: string,
+    tools: ToolDef[],
+    signal?: AbortSignal,
+    middlewareGuardrails?: Guardrail[]
+  ): Promise<{ text: string; toolCalls: ToolCall[] }> {
+    const guardrails = this.getActiveGuardrails(middlewareGuardrails);
+    if (guardrails.length === 0) {
+      return this.runLlmStep(system, tools, signal);
+    }
+
+    const DEFAULT_FEEDBACK =
+      'Your response failed validation: {error}. Please try again.';
+
+    let lastResult = await this.runLlmStep(system, tools, signal);
+
+    for (const guardrail of guardrails) {
+      const maxRetries = guardrail.maxRetries ?? 2;
+      let attempt = 0;
+      let lastError = '';
+
+      while (true) {
+        this.throwIfAborted(signal);
+
+        // Determine if this guardrail should fire based on target filtering
+        const target = guardrail.target ?? 'both';
+        const hasText = lastResult.text.length > 0;
+        const hasToolCalls = lastResult.toolCalls.length > 0;
+
+        if (target === 'text' && !hasText && hasToolCalls) {
+          // text-only guardrail, but LLM returned only tool calls — skip
+          this.bus.emit({ kind: 'guardrail-pass', name: guardrail.name });
+          break;
+        }
+        if (target === 'tool-calls' && !hasToolCalls && hasText) {
+          // tool-calls-only guardrail, but LLM returned only text — skip
+          this.bus.emit({ kind: 'guardrail-pass', name: guardrail.name });
+          break;
+        }
+
+        const validationResult = await guardrail.validate(
+          { text: lastResult.text, toolCalls: lastResult.toolCalls },
+          {
+            node: this.currentNode,
+            state: this.state.snapshot(),
+            attempt,
+            maxRetries,
+            messages: [...this.history],
+          }
+        );
+
+        if (validationResult.valid) {
+          this.bus.emit({ kind: 'guardrail-pass', name: guardrail.name });
+          break;
+        }
+
+        // Validation failed
+        lastError = validationResult.reason ?? 'validation failed';
+        attempt++;
+        this.bus.emit({
+          kind: 'guardrail-fail',
+          name: guardrail.name,
+          error: lastError,
+          attempt,
+        });
+
+        if (attempt > maxRetries) {
+          // Exhausted retries
+          this.bus.emit({
+            kind: 'guardrail-exhausted',
+            name: guardrail.name,
+            error: lastError,
+            attempts: attempt,
+          });
+
+          const policy = this.opts.exhaustionPolicy ?? 'throw';
+          if (policy === 'throw') {
+            throw new GuardrailExhaustionError(
+              guardrail.name,
+              lastError,
+              attempt
+            );
+          }
+          // 'last-response' policy: return the last (invalid) response
+          break;
+        }
+
+        // Push the failed response + feedback into history for retry
+        const template = guardrail.feedbackTemplate ?? DEFAULT_FEEDBACK;
+        const feedback = template.replace('{error}', lastError);
+
+        // Push the failed assistant message so the LLM sees what it said wrong
+        if (lastResult.text) {
+          this.history.push({
+            role: 'assistant',
+            content: lastResult.text,
+          });
+        }
+        this.history.push({ role: 'user', content: feedback });
+
+        // Retry the LLM step
+        lastResult = await this.runLlmStep(system, tools, signal);
+      }
+    }
+
+    return lastResult;
+  }
+
+  /**
+   * Get the active guardrails — combines static guardrails from options
+   * with any dynamically added via middleware.
+   */
+  private getActiveGuardrails(middlewareGuardrails?: Guardrail[]): Guardrail[] {
+    const base = this.opts.guardrails ?? [];
+    if (middlewareGuardrails && middlewareGuardrails.length > 0) {
+      return [...base, ...middlewareGuardrails];
+    }
+    return base;
   }
 
   private async dispatchToolCall(

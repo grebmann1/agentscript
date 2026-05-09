@@ -5,6 +5,7 @@
 
 import type { Msg, ToolCall, ToolDef } from '../llm/types.js';
 import type { RuntimeEvent } from '../events/types.js';
+import type { Guardrail } from '../guardrails/types.js';
 
 export interface Middleware {
   name: string;
@@ -96,6 +97,7 @@ export interface BeforeLlmStepResult {
   system?: string;
   appendMessages?: Msg[];
   tools?: ToolDef[];
+  guardrails?: Guardrail[];
 }
 
 export interface AfterLlmStepContext {

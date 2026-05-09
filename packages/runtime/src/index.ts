@@ -73,6 +73,24 @@ export {
   CheckpointIncompatibleError,
 } from './checkpoint/errors.js';
 
+export { GuardrailExhaustionError } from './guardrails/types.js';
+export type {
+  Guardrail,
+  GuardrailInput,
+  GuardrailContext,
+  GuardrailResult,
+  GuardrailError,
+  GuardrailTarget,
+  ExhaustionPolicy,
+} from './guardrails/types.js';
+export {
+  jsonSchemaGuardrail,
+  regexGuardrail,
+  contentPolicyGuardrail,
+  customGuardrail,
+  composeGuardrails,
+} from './guardrails/validators.js';
+
 export { TracingContext } from './tracing/context.js';
 export { generateTraceId, generateSpanId } from './tracing/ids.js';
 export type {

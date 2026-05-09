@@ -31,6 +31,14 @@ export type RuntimeEvent =
   | { kind: 'abort'; reason?: unknown }
   | { kind: 'tool-limit-reached'; name: string; limit: number }
   | { kind: 'end-session' }
+  | { kind: 'guardrail-pass'; name: string }
+  | { kind: 'guardrail-fail'; name: string; error: string; attempt: number }
+  | {
+      kind: 'guardrail-exhausted';
+      name: string;
+      error: string;
+      attempts: number;
+    }
   | {
       kind: 'span-start';
       traceId: string;

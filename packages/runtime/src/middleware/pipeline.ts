@@ -124,6 +124,8 @@ export class MiddlewarePipeline {
   ): Promise<BeforeLlmStepResult | undefined> {
     let result: BeforeLlmStepResult | undefined;
     const appendedMessages: Msg[] = [];
+    const collectedGuardrails: import('../guardrails/types.js').Guardrail[] =
+      [];
     for (const mw of this.sorted) {
       if (!mw.beforeLlmStep) continue;
       try {
@@ -140,6 +142,9 @@ export class MiddlewarePipeline {
           if (r.appendMessages) {
             appendedMessages.push(...r.appendMessages);
           }
+          if (r.guardrails) {
+            collectedGuardrails.push(...r.guardrails);
+          }
         }
       } catch (err) {
         if (!mw.failOpen) throw err;
@@ -147,6 +152,9 @@ export class MiddlewarePipeline {
     }
     if (appendedMessages.length > 0) {
       result = { ...result, appendMessages: appendedMessages };
+    }
+    if (collectedGuardrails.length > 0) {
+      result = { ...result, guardrails: collectedGuardrails };
     }
     return result;
   }
