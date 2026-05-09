@@ -107,3 +107,13 @@ export {
   type OtlpJsonSpanExporterOptions,
 } from './tracing/exporters/otlp-json.js';
 export type { TracingOptions } from './turn/runtime.js';
+
+export type {
+  DelegationOptions,
+  DelegationFrame,
+  DelegationResult,
+} from './delegation/types.js';
+export {
+  DelegationTimeoutError,
+  DelegationDepthError,
+} from './delegation/errors.js';

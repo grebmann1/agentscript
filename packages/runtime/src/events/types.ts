@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { DelegationResult } from '../delegation/types.js';
+
 /**
  * Named lifecycle phases emitted around each subagent execution. Hosts can
  * use these to group events in a timeline or to show which hook produced a
@@ -38,6 +40,24 @@ export type RuntimeEvent =
       name: string;
       error: string;
       attempts: number;
+    }
+  | {
+      kind: 'delegation-start';
+      parentNode: string;
+      childNode: string;
+      depth: number;
+    }
+  | {
+      kind: 'delegation-end';
+      parentNode: string;
+      childNode: string;
+      result: DelegationResult;
+    }
+  | {
+      kind: 'delegation-error';
+      parentNode: string;
+      childNode: string;
+      error: string;
     }
   | {
       kind: 'span-start';
