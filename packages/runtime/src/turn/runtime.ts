@@ -21,6 +21,21 @@ import {
 } from '../steps/run-steps.js';
 import { renderTemplate } from '../template/render.js';
 import type { LlmDriver, Msg, ToolCall, ToolDef } from '../llm/types.js';
+import { AbortError } from '../errors.js';
+import { MiddlewarePipeline } from '../middleware/pipeline.js';
+import type { Middleware } from '../middleware/types.js';
+import {
+  CHECKPOINT_SCHEMA_VERSION,
+  type Checkpoint,
+} from '../checkpoint/types.js';
+import { CheckpointVersionError } from '../checkpoint/errors.js';
+
+export interface ToolUsageLimit {
+  /** Maximum number of times this tool may be invoked per scope. */
+  maxCalls: number;
+  /** If true, counter resets at the start of each turn(). Default: false (per-session). */
+  resetPerTurn?: boolean;
+}
 
 export interface RuntimeOptions {
   doc: AgentDSLAuthoring;
@@ -30,6 +45,17 @@ export interface RuntimeOptions {
   context?: Record<string, unknown>;
   /** Guard against infinite tool-call/handoff loops. */
   maxStepsPerTurn?: number;
+  /** Default abort signal applied to every turn unless overridden. */
+  signal?: AbortSignal;
+  /** Per-tool invocation budgets, keyed by tool name (as exposed to the LLM). */
+  toolLimits?: Record<string, ToolUsageLimit>;
+  /** Middleware stack. Applied in priority order. */
+  middleware?: Middleware[];
+}
+
+export interface TurnOptions {
+  /** Abort signal for this specific turn. Overrides the runtime-level signal. */
+  signal?: AbortSignal;
 }
 
 export interface TurnResult {
@@ -48,6 +74,9 @@ export class Runtime {
   private readonly history: Msg[] = [];
   private currentNode: string;
   private readonly maxSteps: number;
+  private readonly toolCallCounts = new Map<string, number>();
+  private readonly pipeline: MiddlewarePipeline;
+  private _inTurn = false;
 
   constructor(private readonly opts: RuntimeOptions) {
     this.graph = loadGraph(opts.doc);
@@ -58,19 +87,85 @@ export class Runtime {
     );
     this.currentNode = this.graph.initialNode;
     this.maxSteps = opts.maxStepsPerTurn ?? 8;
+    this.pipeline = new MiddlewarePipeline(opts.middleware);
   }
 
   on(listener: EventListener): () => void {
     return this.bus.on(listener);
   }
 
+  get currentNodeName(): string {
+    return this.currentNode;
+  }
+
+  /** Reset usage counters. Pass a tool name to reset one, or omit to reset all. */
+  resetToolUsage(toolName?: string): void {
+    if (toolName) {
+      this.toolCallCounts.delete(toolName);
+    } else {
+      this.toolCallCounts.clear();
+    }
+  }
+
+  /**
+   * Resolve the effective signal for a turn — per-turn takes precedence over
+   * runtime-level, returning `undefined` when neither is set.
+   */
+  private resolveSignal(turnSignal?: AbortSignal): AbortSignal | undefined {
+    return turnSignal ?? this.opts.signal;
+  }
+
+  /** Throw an AbortError if the signal is already aborted. */
+  private throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw new AbortError(signal.reason);
+    }
+  }
+
   /** Drive one user turn through the ReAct loop. */
-  async turn(userInput: string): Promise<TurnResult> {
+  async turn(userInput: string, options?: TurnOptions): Promise<TurnResult> {
+    const signal = this.resolveSignal(options?.signal);
     const collected: RuntimeEvent[] = [];
     const off = this.bus.on(e => collected.push(e));
 
+    // Reset per-turn tool counters
+    if (this.opts.toolLimits) {
+      for (const [name, limit] of Object.entries(this.opts.toolLimits)) {
+        if (limit.resetPerTurn) this.toolCallCounts.delete(name);
+      }
+    }
+
     try {
+      this._inTurn = true;
+      // CP-1: Check abort before committing to the turn.
+      this.throwIfAborted(signal);
+
       this.history.push({ role: 'user', content: userInput });
+
+      if (!this.pipeline.isEmpty) {
+        const beforeResult = await this.pipeline.runBeforeTurn({
+          userInput,
+          node: this.currentNode,
+          state: this.state.snapshot(),
+        });
+        if (beforeResult?.abort) {
+          this.bus.emit({ kind: 'turn-start', node: this.currentNode });
+          this.bus.emit({ kind: 'turn-end', node: this.currentNode });
+          return {
+            assistantText: beforeResult.abort.assistantText,
+            finalNode: this.currentNode,
+            events: collected,
+          };
+        }
+        if (beforeResult?.userInput !== undefined) {
+          userInput = beforeResult.userInput;
+          this.history[this.history.length - 1] = {
+            role: 'user',
+            content: userInput,
+          };
+        }
+      }
+
       this.bus.emit({ kind: 'turn-start', node: this.currentNode });
 
       let assistantText = '';
@@ -80,6 +175,8 @@ export class Runtime {
       // before_reasoning, after_all_tool_calls, after_reasoning, or an
       // after_reasoning transition) swaps `currentNode` and continues.
       outer: while (true) {
+        // CP-2: Check abort at top of outer loop.
+        this.throwIfAborted(signal);
         const node = this.requireNode(this.currentNode);
         this.bus.emit({ kind: 'node-enter', node: node.developer_name });
 
@@ -124,10 +221,13 @@ export class Runtime {
           continue;
         }
 
-        // 2. Reasoning loop: LLM step → (tool calls? dispatch then loop)
-        //                              → (no tool calls? done, run after_*)
+        // 2. Reasoning loop: LLM step -> (tool calls? dispatch then loop)
+        //                              -> (no tool calls? done, run after_*)
         let loopHandoff: string | undefined;
         reasoning: while (true) {
+          // CP-3: Check abort at top of reasoning loop.
+          this.throwIfAborted(signal);
+
           // before_reasoning_iteration — runs at the top of each LLM iteration
           const iterSteps = node.before_reasoning_iteration as Step[] | null;
           if (iterSteps && iterSteps.length > 0) {
@@ -151,9 +251,14 @@ export class Runtime {
           // `available when` clause). This is what prevents the LLM from
           // seeing, e.g., a transition whose preconditions aren't met yet.
           const enableScope = makeScope(this.state);
-          const visibleTools = nodeTools.filter(t =>
-            isEnabled(t.enabled, enableScope)
-          );
+          const visibleTools = nodeTools
+            .filter(t => isEnabled(t.enabled, enableScope))
+            .filter(t => {
+              if (!this.opts.toolLimits) return true;
+              const limit = this.opts.toolLimits[t.name];
+              if (!limit) return true;
+              return (this.toolCallCounts.get(t.name) ?? 0) < limit.maxCalls;
+            });
           for (const skipped of nodeTools) {
             if (!isEnabled(skipped.enabled, enableScope)) {
               this.bus.emit({
@@ -168,14 +273,35 @@ export class Runtime {
           // That sentinel tells the runtime "no real adapter call, apply
           // state_updates inline", NOT "hide from the model". The LLM has
           // to see these tools to emit the tool-call that fires them.
+          let effectiveSystem = system;
+          let effectiveTools: ToolDef[] = visibleTools.map(stripInternal);
+          if (!this.pipeline.isEmpty) {
+            const beforeLlm = await this.pipeline.runBeforeLlmStep({
+              node: this.currentNode,
+              state: this.state.snapshot(),
+              system,
+              messages: [...this.history],
+              tools: effectiveTools,
+            });
+            if (beforeLlm) {
+              if (beforeLlm.system !== undefined)
+                effectiveSystem = beforeLlm.system;
+              if (beforeLlm.tools) effectiveTools = beforeLlm.tools;
+              if (beforeLlm.appendMessages) {
+                for (const m of beforeLlm.appendMessages) this.history.push(m);
+              }
+            }
+          }
+
           this.bus.emit({
             kind: 'phase-start',
             node: node.developer_name,
             phase: 'reasoning',
           });
           const turn = await this.runLlmStep(
-            system,
-            visibleTools.map(stripInternal)
+            effectiveSystem,
+            effectiveTools,
+            signal
           );
           this.bus.emit({
             kind: 'phase-end',
@@ -183,10 +309,23 @@ export class Runtime {
             phase: 'reasoning',
           });
 
+          if (!this.pipeline.isEmpty) {
+            const afterLlm = await this.pipeline.runAfterLlmStep({
+              node: this.currentNode,
+              state: this.state.snapshot(),
+              text: turn.text,
+              toolCalls: turn.toolCalls,
+            });
+            if (afterLlm) {
+              if (afterLlm.text !== undefined) turn.text = afterLlm.text;
+              if (afterLlm.toolCalls) turn.toolCalls = afterLlm.toolCalls;
+            }
+          }
+
           assistantText += turn.text;
 
           if (turn.toolCalls.length === 0) {
-            // LLM is done talking → push a plain assistant message and exit.
+            // LLM is done talking -> push a plain assistant message and exit.
             if (turn.text)
               this.history.push({ role: 'assistant', content: turn.text });
             break reasoning;
@@ -194,7 +333,7 @@ export class Runtime {
 
           // The model emitted tool calls. Push a single assistant message
           // that carries both the text (if any) and the tool_calls, so the
-          // provider sees a valid tool_calls → tool_result handshake.
+          // provider sees a valid tool_calls -> tool_result handshake.
           this.history.push({
             role: 'assistant',
             content: '',
@@ -203,7 +342,13 @@ export class Runtime {
 
           let sessionEnded = false;
           for (const call of turn.toolCalls) {
-            const outcome = await this.dispatchToolCall(call, nodeTools);
+            // CP-4: Check abort before each tool dispatch.
+            this.throwIfAborted(signal);
+            const outcome = await this.dispatchToolCall(
+              call,
+              nodeTools,
+              signal
+            );
             if (outcome.endSession) {
               sessionEnded = true;
               break;
@@ -281,15 +426,75 @@ export class Runtime {
           continue;
         }
 
-        // No handoff → turn ends on this node.
+        // No handoff -> turn ends on this node.
         break outer;
       }
 
       this.bus.emit({ kind: 'turn-end', node: this.currentNode });
+
+      if (!this.pipeline.isEmpty) {
+        const afterResult = await this.pipeline.runAfterTurn({
+          assistantText,
+          finalNode: this.currentNode,
+          state: this.state.snapshot(),
+          events: collected,
+        });
+        if (afterResult?.assistantText !== undefined) {
+          assistantText = afterResult.assistantText;
+        }
+      }
+
       return { assistantText, finalNode: this.currentNode, events: collected };
+    } catch (err) {
+      if (err instanceof AbortError) {
+        this.bus.emit({ kind: 'abort', reason: err.reason });
+      }
+      throw err;
     } finally {
+      this._inTurn = false;
       off();
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Checkpoint / Restore
+  // -----------------------------------------------------------------------
+
+  checkpoint(opts?: {
+    id?: string;
+    metadata?: Record<string, unknown>;
+  }): Checkpoint {
+    if (this._inTurn) {
+      throw new Error(
+        'Cannot checkpoint mid-turn. Wait for turn() to resolve.'
+      );
+    }
+    return {
+      schemaVersion: CHECKPOINT_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      id: opts?.id ?? crypto.randomUUID(),
+      currentNode: this.currentNode,
+      history: structuredClone(this.history),
+      stateValues: this.state.snapshot(),
+      metadata: opts?.metadata,
+    };
+  }
+
+  static fromCheckpoint(opts: RuntimeOptions, checkpoint: Checkpoint): Runtime {
+    if (checkpoint.schemaVersion !== CHECKPOINT_SCHEMA_VERSION) {
+      throw new CheckpointVersionError(
+        checkpoint.schemaVersion,
+        CHECKPOINT_SCHEMA_VERSION
+      );
+    }
+    const rt = new Runtime(opts);
+    rt.currentNode = checkpoint.currentNode;
+    rt.history.length = 0;
+    rt.history.push(...structuredClone(checkpoint.history));
+    for (const [key, value] of Object.entries(checkpoint.stateValues)) {
+      rt.state._restoreValue(key, value);
+    }
+    return rt;
   }
 
   // -----------------------------------------------------------------------
@@ -368,16 +573,20 @@ export class Runtime {
 
   private async runLlmStep(
     system: string,
-    tools: ToolDef[]
+    tools: ToolDef[],
+    signal?: AbortSignal
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
     const iter = this.opts.llm.step({
       system,
       messages: [...this.history],
       tools,
+      signal,
     });
     let text = '';
     const toolCalls: ToolCall[] = [];
     for await (const ev of iter) {
+      // CP-5: Check abort after each streamed event.
+      this.throwIfAborted(signal);
       if (ev.kind === 'text-delta') {
         text += ev.text;
         this.bus.emit({ kind: 'llm-text', text: ev.text });
@@ -396,7 +605,8 @@ export class Runtime {
         bound?: Record<string, unknown>;
         stateUpdates?: Array<Record<string, unknown>> | null;
       }
-    >
+    >,
+    signal?: AbortSignal
   ): Promise<{ endSession: boolean }> {
     const def = tools.find(t => t.name === call.name);
     if (!def) {
@@ -413,6 +623,31 @@ export class Runtime {
       });
       return { endSession: false };
     }
+
+    // Per-tool usage limit check
+    if (this.opts.toolLimits) {
+      const limit = this.opts.toolLimits[call.name];
+      if (limit) {
+        const count = this.toolCallCounts.get(call.name) ?? 0;
+        if (count >= limit.maxCalls) {
+          this.bus.emit({
+            kind: 'tool-limit-reached',
+            name: call.name,
+            limit: limit.maxCalls,
+          });
+          this.history.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            tool_name: call.name,
+            content: JSON.stringify({
+              error: `Tool "${call.name}" has reached its usage limit of ${limit.maxCalls} calls. Choose a different approach.`,
+            }),
+          });
+          return { endSession: false };
+        }
+      }
+    }
+
     // Merge compiler-bound args (expression strings that need evaluating)
     // with LLM-provided args (already literal). Only the bound half goes
     // through the expression evaluator.
@@ -424,6 +659,29 @@ export class Runtime {
       }
     }
     const args = { ...boundEvaluated, ...call.arguments };
+
+    // --- beforeToolCall middleware hook ---
+    if (!this.pipeline.isEmpty) {
+      const beforeTc = await this.pipeline.runBeforeToolCall({
+        node: this.currentNode,
+        state: this.state.snapshot(),
+        target: def.target,
+        toolName: call.name,
+        args: { ...args },
+        toolCall: call,
+      });
+      if (beforeTc?.skip) return { endSession: false };
+      if (beforeTc?.abort) {
+        this.history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          tool_name: call.name,
+          content: JSON.stringify(beforeTc.abort.result),
+        });
+        return { endSession: false };
+      }
+      if (beforeTc?.args) Object.assign(args, beforeTc.args);
+    }
 
     this.bus.emit({ kind: 'tool-call', name: def.target, args });
 
@@ -441,27 +699,82 @@ export class Runtime {
       endSession = true;
     } else {
       try {
-        result = await this.opts.tools.invoke(def.target, args);
+        result = await this.opts.tools.invoke(def.target, args, { signal });
       } catch (err) {
-        this.bus.emit({
-          kind: 'tool-error',
-          name: def.target,
-          error: String(err),
-        });
-        this.history.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          tool_name: call.name,
-          content: JSON.stringify({ error: String(err) }),
-        });
-        return { endSession: false };
+        if (!this.pipeline.isEmpty) {
+          const errorResult = await this.pipeline.runOnError({
+            node: this.currentNode,
+            state: this.state.snapshot(),
+            error: err,
+            phase: 'tool-call',
+            toolName: call.name,
+            target: def.target,
+          });
+          if (errorResult?.suppress && errorResult.fallbackResult) {
+            result = errorResult.fallbackResult;
+          } else if (errorResult?.suppress) {
+            this.history.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              tool_name: call.name,
+              content: JSON.stringify({}),
+            });
+            return { endSession: false };
+          } else {
+            this.bus.emit({
+              kind: 'tool-error',
+              name: def.target,
+              error: String(err),
+            });
+            this.history.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              tool_name: call.name,
+              content: JSON.stringify({ error: String(err) }),
+            });
+            return { endSession: false };
+          }
+        } else {
+          this.bus.emit({
+            kind: 'tool-error',
+            name: def.target,
+            error: String(err),
+          });
+          this.history.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            tool_name: call.name,
+            content: JSON.stringify({ error: String(err) }),
+          });
+          return { endSession: false };
+        }
       }
     }
-    this.bus.emit({ kind: 'tool-result', name: def.target, result });
+
+    // --- afterToolCall middleware hook ---
+    if (!this.pipeline.isEmpty) {
+      const afterTc = await this.pipeline.runAfterToolCall({
+        node: this.currentNode,
+        state: this.state.snapshot(),
+        target: def.target,
+        toolName: call.name,
+        args,
+        result: result!,
+      });
+      if (afterTc?.result) result = afterTc.result;
+    }
+
+    this.bus.emit({ kind: 'tool-result', name: def.target, result: result! });
+
+    // Increment per-tool usage counter after successful invocation
+    this.toolCallCounts.set(
+      call.name,
+      (this.toolCallCounts.get(call.name) ?? 0) + 1
+    );
 
     // Apply state_updates against the result (so `result.*` refs resolve).
     if (def.stateUpdates) {
-      const resultScope = makeScope(this.state, result);
+      const resultScope = makeScope(this.state, result!);
       for (const entry of def.stateUpdates) {
         for (const [name, raw] of Object.entries(entry)) {
           this.state.set(name, evalBoundValue(raw, resultScope));
@@ -484,7 +797,7 @@ export class Runtime {
 }
 
 /**
- * Build `developer_name → scheme://name` map from a node's action_definitions.
+ * Build `developer_name -> scheme://name` map from a node's action_definitions.
  * Same resolution logic used for tool-slot bindings and hook-invoked actions.
  */
 function buildActionUriMap(node: SubAgentNode): Map<string, string> {

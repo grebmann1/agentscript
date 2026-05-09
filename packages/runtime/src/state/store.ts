@@ -74,6 +74,14 @@ export class StateStore {
   }
 
   /**
+   * Restore a value without visibility checks. Used internally by checkpoint restore.
+   * @internal
+   */
+  _restoreValue(name: string, value: unknown): void {
+    this.values.set(name, value);
+  }
+
+  /**
    * Default values in the compiled IR are stored as *expression strings*
    * (e.g. `'"__EMPTY__"'`, `0`, `false`). Strings that look like quoted
    * literals get unwrapped; everything else is returned as-is.

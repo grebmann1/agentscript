@@ -15,7 +15,10 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -34,6 +37,9 @@
     "ai": ">=4.0.0"
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.76",
+    "@ai-sdk/openai": "^2.0.106",
+    "ai": "^5.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.8.3",
     "vitest": "^3.0.0"

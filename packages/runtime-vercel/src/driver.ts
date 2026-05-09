@@ -79,6 +79,7 @@ export class VercelAiSdkDriver implements LlmDriver {
       system: input.system,
       messages: input.messages.map(toAiSdkMessage),
       tools: buildToolsObject(input.tools, this.opts.jsonSchema),
+      ...(input.signal ? { abortSignal: input.signal } : {}),
       ...(this.opts.providerOptions ?? {}),
     });
 

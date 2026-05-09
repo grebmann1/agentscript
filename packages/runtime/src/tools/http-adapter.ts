@@ -21,6 +21,7 @@ export class HttpAdapter implements ToolAdapter {
   async invoke({
     target,
     args,
+    signal,
   }: ToolAdapterInvocation): Promise<Record<string, unknown>> {
     const res = await fetch(target, {
       method: this.opts.method ?? 'POST',
@@ -29,6 +30,7 @@ export class HttpAdapter implements ToolAdapter {
         ...(this.opts.headers ?? {}),
       },
       body: JSON.stringify(args),
+      signal,
     });
     if (!res.ok) {
       throw new Error(`HTTP tool "${target}" returned ${res.status}`);

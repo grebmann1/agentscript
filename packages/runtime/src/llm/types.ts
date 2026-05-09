@@ -48,6 +48,7 @@ export interface LlmStepInput {
   system: string;
   messages: Msg[];
   tools: ToolDef[];
+  signal?: AbortSignal;
 }
 
 export interface LlmDriver {

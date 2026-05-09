@@ -4,7 +4,14 @@
  */
 
 export { Runtime } from './turn/runtime.js';
-export type { RuntimeOptions, TurnResult } from './turn/runtime.js';
+export type {
+  RuntimeOptions,
+  TurnOptions,
+  TurnResult,
+  ToolUsageLimit,
+} from './turn/runtime.js';
+
+export { AbortError } from './errors.js';
 
 export { StateStore } from './state/store.js';
 export type { StateVarSpec } from './state/store.js';
@@ -38,3 +45,30 @@ export type {
   ToolCall,
   ToolDef,
 } from './llm/types.js';
+
+export { MiddlewarePipeline } from './middleware/pipeline.js';
+export type {
+  Middleware,
+  BeforeTurnContext,
+  BeforeTurnResult,
+  AfterTurnContext,
+  AfterTurnResult,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+  AfterToolCallContext,
+  AfterToolCallResult,
+  BeforeLlmStepContext,
+  BeforeLlmStepResult,
+  AfterLlmStepContext,
+  AfterLlmStepResult,
+  OnErrorContext,
+  OnErrorResult,
+} from './middleware/types.js';
+
+export { CHECKPOINT_SCHEMA_VERSION } from './checkpoint/types.js';
+export type { Checkpoint, CheckpointStore } from './checkpoint/types.js';
+export { MemoryCheckpointStore } from './checkpoint/memory-store.js';
+export {
+  CheckpointVersionError,
+  CheckpointIncompatibleError,
+} from './checkpoint/errors.js';

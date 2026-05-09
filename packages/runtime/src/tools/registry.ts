@@ -11,6 +11,8 @@ export interface ToolAdapterInvocation {
   target: string;
   /** Resolved arguments (bound_inputs merged with LLM-provided args). */
   args: Record<string, unknown>;
+  /** Optional abort signal forwarded from the runtime turn. */
+  signal?: AbortSignal;
 }
 
 export interface ToolAdapter {
@@ -31,7 +33,8 @@ export class ToolRegistry {
 
   async invoke(
     target: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    options?: { signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
     if (target === STATE_UPDATE_TARGET) {
       return {};
@@ -48,7 +51,11 @@ export class ToolRegistry {
     if (!adapter) {
       throw new Error(`No tool adapter registered for scheme "${scheme}://"`);
     }
-    const result = await adapter.invoke({ target, args });
+    const result = await adapter.invoke({
+      target,
+      args,
+      signal: options?.signal,
+    });
     return result ?? {};
   }
 }

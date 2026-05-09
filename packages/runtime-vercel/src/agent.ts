@@ -9,6 +9,7 @@ import {
   type RuntimeEvent,
   type LlmDriver,
   type TurnResult,
+  type TurnOptions,
 } from '@agentscript/runtime';
 import type { AgentDSLAuthoring } from '@agentscript/compiler';
 
@@ -60,6 +61,7 @@ export type AgentStreamPart =
       before: unknown;
       after: unknown;
     }
+  | { type: 'abort'; reason?: unknown }
   | { type: 'finish'; finalNode: string; assistantText: string }
   | { type: 'error'; error: unknown };
 
@@ -86,6 +88,8 @@ export interface AgentStepInfo {
 }
 
 export interface AgentRunOptions {
+  /** Abort signal for this turn. */
+  signal?: AbortSignal;
   /** Fired once per node entry/exit. */
   onStepFinish?: (step: AgentStepInfo) => void | Promise<void>;
   /** Fired when the entire turn completes (success or swallowed error). */
@@ -192,7 +196,10 @@ export class AgentScriptAgent {
     });
 
     try {
-      const turn: TurnResult = await this.runtime.turn(userInput);
+      const turnOpts: TurnOptions | undefined = opts.signal
+        ? { signal: opts.signal }
+        : undefined;
+      const turn: TurnResult = await this.runtime.turn(userInput, turnOpts);
       const result: AgentRunResult = {
         assistantText: turn.assistantText,
         finalNode: turn.finalNode,
@@ -213,7 +220,7 @@ export class AgentScriptAgent {
    * parts, `textStream` of text deltas) plus a `result` promise — matching
    * the Vercel AI SDK `streamText` ergonomics.
    */
-  stream(userInput: string): AgentStream {
+  stream(userInput: string, opts?: { signal?: AbortSignal }): AgentStream {
     const parts: AgentStreamPart[] = [];
     let resolveDone!: () => void;
     const donePromise = new Promise<void>(r => {
@@ -251,7 +258,10 @@ export class AgentScriptAgent {
 
     const driving = (async () => {
       try {
-        const turn = await this.runtime.turn(userInput);
+        const streamTurnOpts: TurnOptions | undefined = opts?.signal
+          ? { signal: opts.signal }
+          : undefined;
+        const turn = await this.runtime.turn(userInput, streamTurnOpts);
         finalResult = {
           assistantText: turn.assistantText,
           finalNode: turn.finalNode,
@@ -336,8 +346,10 @@ function runtimeEventToStreamPart(e: RuntimeEvent): AgentStreamPart | null {
       return { type: 'phase-start', node: e.node, phase: e.phase };
     case 'phase-end':
       return { type: 'phase-end', node: e.node, phase: e.phase };
-    // turn-start, turn-end, end-session, action-skipped: not surfaced as
-    // stream parts — `finish` covers the end-of-turn signal.
+    case 'abort':
+      return { type: 'abort', reason: e.reason };
+    // turn-start, turn-end, end-session, action-skipped, tool-limit-reached:
+    // not surfaced as stream parts — `finish` covers the end-of-turn signal.
     default:
       return null;
   }

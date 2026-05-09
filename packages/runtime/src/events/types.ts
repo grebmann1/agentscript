@@ -28,6 +28,8 @@ export type RuntimeEvent =
   | { kind: 'tool-error'; name: string; error: string }
   | { kind: 'llm-text'; text: string }
   | { kind: 'action-skipped'; name: string; reason: string }
+  | { kind: 'abort'; reason?: unknown }
+  | { kind: 'tool-limit-reached'; name: string; limit: number }
   | { kind: 'end-session' };
 
 export type EventListener = (event: RuntimeEvent) => void;
