@@ -29,12 +29,23 @@ import {
   type Checkpoint,
 } from '../checkpoint/types.js';
 import { CheckpointVersionError } from '../checkpoint/errors.js';
+import { TracingContext } from '../tracing/context.js';
+import type { SpanExporter } from '../tracing/types.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
   maxCalls: number;
   /** If true, counter resets at the start of each turn(). Default: false (per-session). */
   resetPerTurn?: boolean;
+}
+
+export interface TracingOptions {
+  /** Enable tracing instrumentation. Default: false. */
+  enabled: boolean;
+  /** Span exporter to receive completed spans. */
+  exporter?: SpanExporter;
+  /** Sample rate between 0 and 1. 0 = never trace, 1 = always trace. Default: 1. */
+  sampleRate?: number;
 }
 
 export interface RuntimeOptions {
@@ -51,6 +62,8 @@ export interface RuntimeOptions {
   toolLimits?: Record<string, ToolUsageLimit>;
   /** Middleware stack. Applied in priority order. */
   middleware?: Middleware[];
+  /** Tracing / observability configuration. */
+  tracing?: TracingOptions;
 }
 
 export interface TurnOptions {
@@ -77,6 +90,7 @@ export class Runtime {
   private readonly toolCallCounts = new Map<string, number>();
   private readonly pipeline: MiddlewarePipeline;
   private _inTurn = false;
+  private _tracingCtx: TracingContext | null = null;
 
   constructor(private readonly opts: RuntimeOptions) {
     this.graph = loadGraph(opts.doc);
@@ -88,6 +102,42 @@ export class Runtime {
     this.currentNode = this.graph.initialNode;
     this.maxSteps = opts.maxStepsPerTurn ?? 8;
     this.pipeline = new MiddlewarePipeline(opts.middleware);
+  }
+
+  /** Whether tracing is active for this turn. */
+  private shouldTrace(): boolean {
+    const t = this.opts.tracing;
+    if (!t || !t.enabled) return false;
+    const rate = t.sampleRate ?? 1;
+    if (rate <= 0) return false;
+    if (rate >= 1) return true;
+    return Math.random() < rate;
+  }
+
+  private traceStart(name: string, attributes?: Record<string, unknown>): void {
+    if (!this._tracingCtx) return;
+    const span = this._tracingCtx.startSpan(name, attributes);
+    this.bus.emit({
+      kind: 'span-start',
+      traceId: span.traceId,
+      spanId: span.spanId,
+      name: span.name,
+      parentSpanId: span.parentSpanId,
+    });
+  }
+
+  private traceEnd(status?: 'ok' | 'error' | 'unset'): void {
+    if (!this._tracingCtx) return;
+    const span = this._tracingCtx.endSpan(status);
+    if (span) {
+      this.bus.emit({
+        kind: 'span-end',
+        traceId: span.traceId,
+        spanId: span.spanId,
+        name: span.name,
+        status: span.status,
+      });
+    }
   }
 
   on(listener: EventListener): () => void {
@@ -137,8 +187,21 @@ export class Runtime {
 
     try {
       this._inTurn = true;
+
+      // Initialize tracing context for this turn if sampling says yes.
+      if (this.shouldTrace()) {
+        this._tracingCtx = new TracingContext({
+          exporter: this.opts.tracing?.exporter,
+        });
+      } else {
+        this._tracingCtx = null;
+      }
+
       // CP-1: Check abort before committing to the turn.
       this.throwIfAborted(signal);
+
+      // Root "turn" span
+      this.traceStart('turn');
 
       this.history.push({ role: 'user', content: userInput });
 
@@ -178,6 +241,7 @@ export class Runtime {
         // CP-2: Check abort at top of outer loop.
         this.throwIfAborted(signal);
         const node = this.requireNode(this.currentNode);
+        this.traceStart('node', { 'node.name': node.developer_name });
         this.bus.emit({ kind: 'node-enter', node: node.developer_name });
 
         // Per-node resolution of tools + action refs (compiled IR stores tool
@@ -201,6 +265,9 @@ export class Runtime {
         // 1. before_reasoning (runs once per node entry)
         const preSteps = node.before_reasoning as Step[] | null;
         if (preSteps && preSteps.length > 0) {
+          this.traceStart('phase:before_reasoning', {
+            'node.name': node.developer_name,
+          });
           this.bus.emit({
             kind: 'phase-start',
             node: node.developer_name,
@@ -214,8 +281,10 @@ export class Runtime {
             node: node.developer_name,
             phase: 'before_reasoning',
           });
+          this.traceEnd('ok');
         }
         if (preOutcome.handoffTo) {
+          this.traceEnd('ok'); // end node span
           this.currentNode = preOutcome.handoffTo;
           if (++steps > this.maxSteps) break;
           continue;
@@ -293,6 +362,7 @@ export class Runtime {
             }
           }
 
+          this.traceStart('llm-step', { 'node.name': node.developer_name });
           this.bus.emit({
             kind: 'phase-start',
             node: node.developer_name,
@@ -308,6 +378,7 @@ export class Runtime {
             node: node.developer_name,
             phase: 'reasoning',
           });
+          this.traceEnd('ok');
 
           if (!this.pipeline.isEmpty) {
             const afterLlm = await this.pipeline.runAfterLlmStep({
@@ -344,11 +415,15 @@ export class Runtime {
           for (const call of turn.toolCalls) {
             // CP-4: Check abort before each tool dispatch.
             this.throwIfAborted(signal);
+            this.traceStart(`tool-call:${call.name}`, {
+              'tool.name': call.name,
+            });
             const outcome = await this.dispatchToolCall(
               call,
               nodeTools,
               signal
             );
+            this.traceEnd('ok');
             if (outcome.endSession) {
               sessionEnded = true;
               break;
@@ -398,6 +473,7 @@ export class Runtime {
         }
 
         if (loopHandoff) {
+          this.traceEnd('ok'); // end node span
           this.currentNode = loopHandoff;
           if (++steps > this.maxSteps) break outer;
           continue;
@@ -421,16 +497,26 @@ export class Runtime {
           });
         }
         if (after.handoffTo) {
+          this.traceEnd('ok'); // end node span
           this.currentNode = after.handoffTo;
           if (++steps > this.maxSteps) break outer;
           continue;
         }
 
         // No handoff -> turn ends on this node.
+        this.traceEnd('ok'); // end node span
         break outer;
       }
 
       this.bus.emit({ kind: 'turn-end', node: this.currentNode });
+
+      // End root "turn" span
+      this.traceEnd('ok');
+
+      // Flush tracing spans to exporter
+      if (this._tracingCtx) {
+        await this._tracingCtx.flush();
+      }
 
       if (!this.pipeline.isEmpty) {
         const afterResult = await this.pipeline.runAfterTurn({
@@ -447,6 +533,11 @@ export class Runtime {
       return { assistantText, finalNode: this.currentNode, events: collected };
     } catch (err) {
       if (err instanceof AbortError) {
+        // Drain unclosed spans with error status
+        if (this._tracingCtx) {
+          this._tracingCtx.drainAll('error');
+          await this._tracingCtx.flush();
+        }
         this.bus.emit({ kind: 'abort', reason: err.reason });
       }
       throw err;

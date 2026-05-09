@@ -72,3 +72,20 @@ export {
   CheckpointVersionError,
   CheckpointIncompatibleError,
 } from './checkpoint/errors.js';
+
+export { TracingContext } from './tracing/context.js';
+export { generateTraceId, generateSpanId } from './tracing/ids.js';
+export type {
+  Span,
+  SpanExporter,
+  SpanStatus,
+  SpanEvent,
+} from './tracing/types.js';
+export { MultiSpanExporter } from './tracing/types.js';
+export { InMemorySpanExporter } from './tracing/exporters/memory.js';
+export { ConsoleSpanExporter } from './tracing/exporters/console.js';
+export {
+  OtlpJsonSpanExporter,
+  type OtlpJsonSpanExporterOptions,
+} from './tracing/exporters/otlp-json.js';
+export type { TracingOptions } from './turn/runtime.js';

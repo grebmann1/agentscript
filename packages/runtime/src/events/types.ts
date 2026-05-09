@@ -30,7 +30,21 @@ export type RuntimeEvent =
   | { kind: 'action-skipped'; name: string; reason: string }
   | { kind: 'abort'; reason?: unknown }
   | { kind: 'tool-limit-reached'; name: string; limit: number }
-  | { kind: 'end-session' };
+  | { kind: 'end-session' }
+  | {
+      kind: 'span-start';
+      traceId: string;
+      spanId: string;
+      name: string;
+      parentSpanId?: string;
+    }
+  | {
+      kind: 'span-end';
+      traceId: string;
+      spanId: string;
+      name: string;
+      status: string;
+    };
 
 export type EventListener = (event: RuntimeEvent) => void;
 
