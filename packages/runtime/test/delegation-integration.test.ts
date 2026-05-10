@@ -1,12 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { compileSource } from '@agentscript/agentforce';
-import {
-  Runtime,
-  ToolRegistry,
-  FnAdapter,
-  AbortError,
-} from '../src/index.js';
-import { DelegationTimeoutError, DelegationDepthError } from '../src/delegation/errors.js';
+import { Runtime, ToolRegistry, FnAdapter, AbortError } from '../src/index.js';
 import type { RuntimeEvent } from '../src/index.js';
 import { ScriptedLlm } from './helpers.js';
 
@@ -226,7 +220,11 @@ describe('Runtime — delegation integration', () => {
       // Parent calls delegate tool
       {
         toolCalls: [
-          { id: 'tc1', name: 'delegate', arguments: { context: 'secret task' } },
+          {
+            id: 'tc1',
+            name: 'delegate',
+            arguments: { context: 'secret task' },
+          },
         ],
       },
       // Child calls tool
@@ -301,7 +299,9 @@ describe('Runtime — delegation integration', () => {
       return '';
     });
     const childContent = childMessages.join(' ');
-    expect(childContent).toContain('[Delegation context: summarize the report]');
+    expect(childContent).toContain(
+      '[Delegation context: summarize the report]'
+    );
   });
 
   it('delegation timeout — child exceeds maxSteps', async () => {
@@ -321,7 +321,11 @@ describe('Runtime — delegation integration', () => {
       // Parent calls delegate
       {
         toolCalls: [
-          { id: 'tc1', name: 'delegate', arguments: { context: 'infinite loop' } },
+          {
+            id: 'tc1',
+            name: 'delegate',
+            arguments: { context: 'infinite loop' },
+          },
         ],
       },
       // Child iteration 1: calls tool
@@ -373,13 +377,21 @@ describe('Runtime — delegation integration', () => {
       // Top calls delegate to middle
       {
         toolCalls: [
-          { id: 'tc1', name: 'delegate_middle', arguments: { context: 'go deep' } },
+          {
+            id: 'tc1',
+            name: 'delegate_middle',
+            arguments: { context: 'go deep' },
+          },
         ],
       },
       // Middle calls delegate to bottom (this exceeds maxDepth=1)
       {
         toolCalls: [
-          { id: 'tc2', name: 'delegate_bottom', arguments: { context: 'deeper' } },
+          {
+            id: 'tc2',
+            name: 'delegate_bottom',
+            arguments: { context: 'deeper' },
+          },
         ],
       },
       // Middle gets error result, responds
@@ -417,6 +429,7 @@ describe('Runtime — delegation integration', () => {
     // Create an LLM that aborts during the child's execution
     let callCount = 0;
     const abortingLlm = {
+      // eslint-disable-next-line @typescript-eslint/require-await -- async generator required by LlmDriver interface
       async *step(
         _input: Parameters<typeof ScriptedLlm.prototype.step>[0]
       ): AsyncIterable<import('../src/index.js').StepEvent> {
@@ -425,7 +438,11 @@ describe('Runtime — delegation integration', () => {
           // Parent's first call: emit delegate tool call
           yield {
             kind: 'tool-call' as const,
-            call: { id: 'tc1', name: 'delegate', arguments: { context: 'abort me' } },
+            call: {
+              id: 'tc1',
+              name: 'delegate',
+              arguments: { context: 'abort me' },
+            },
           };
           yield { kind: 'finish' as const, reason: 'tool-calls' as const };
         } else {
@@ -565,7 +582,11 @@ describe('Runtime — delegation integration', () => {
       // Parent calls delegate
       {
         toolCalls: [
-          { id: 'tc1', name: 'delegate', arguments: { context: 'shared history' } },
+          {
+            id: 'tc1',
+            name: 'delegate',
+            arguments: { context: 'shared history' },
+          },
         ],
       },
       // Child responds
