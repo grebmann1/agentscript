@@ -117,3 +117,13 @@ export {
   DelegationTimeoutError,
   DelegationDepthError,
 } from './delegation/errors.js';
+
+export type {
+  StructuredOutputOptions,
+  StructuredOutputStrategy,
+  ParsedStructuredOutput,
+} from './structured-output/types.js';
+export {
+  buildResponseFormat,
+  parseStructuredOutput,
+} from './structured-output/enforce.js';

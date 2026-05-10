@@ -20,7 +20,13 @@ import {
   type Step,
 } from '../steps/run-steps.js';
 import { renderTemplate } from '../template/render.js';
-import type { LlmDriver, Msg, ToolCall, ToolDef } from '../llm/types.js';
+import type {
+  LlmDriver,
+  LlmStepInput,
+  Msg,
+  ToolCall,
+  ToolDef,
+} from '../llm/types.js';
 import { AbortError } from '../errors.js';
 import { MiddlewarePipeline } from '../middleware/pipeline.js';
 import type { Middleware } from '../middleware/types.js';
@@ -33,6 +39,7 @@ import { TracingContext } from '../tracing/context.js';
 import type { SpanExporter } from '../tracing/types.js';
 import type { Guardrail, ExhaustionPolicy } from '../guardrails/types.js';
 import { GuardrailExhaustionError } from '../guardrails/types.js';
+import { jsonSchemaGuardrail } from '../guardrails/validators.js';
 import type {
   DelegationOptions,
   DelegationFrame,
@@ -42,6 +49,14 @@ import {
   DelegationTimeoutError,
   DelegationDepthError,
 } from '../delegation/errors.js';
+import type {
+  StructuredOutputOptions,
+  ParsedStructuredOutput,
+} from '../structured-output/types.js';
+import {
+  buildResponseFormat,
+  parseStructuredOutput,
+} from '../structured-output/enforce.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
@@ -81,6 +96,8 @@ export interface RuntimeOptions {
   tracing?: TracingOptions;
   /** Default options for delegations. */
   delegation?: DelegationOptions;
+  /** Structured output enforcement configuration. */
+  structuredOutput?: StructuredOutputOptions;
 }
 
 export interface TurnOptions {
@@ -95,6 +112,8 @@ export interface TurnResult {
   finalNode: string;
   /** All events emitted during the turn (also streamed via `on`). */
   events: RuntimeEvent[];
+  /** Parsed structured output (populated when structuredOutput is configured). */
+  parsed?: ParsedStructuredOutput;
 }
 
 export class Runtime {
@@ -556,7 +575,21 @@ export class Runtime {
         }
       }
 
-      return { assistantText, finalNode: this.currentNode, events: collected };
+      // Parse structured output if configured
+      let parsed: ParsedStructuredOutput | undefined;
+      if (this.opts.structuredOutput && assistantText) {
+        parsed = parseStructuredOutput(
+          assistantText,
+          this.opts.structuredOutput.schema
+        );
+      }
+
+      return {
+        assistantText,
+        finalNode: this.currentNode,
+        events: collected,
+        parsed,
+      };
     } catch (err) {
       if (err instanceof AbortError) {
         // Drain unclosed spans with error status
@@ -691,14 +724,19 @@ export class Runtime {
   private async runLlmStep(
     system: string,
     tools: ToolDef[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    responseFormat?: LlmStepInput['responseFormat']
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
-    const iter = this.opts.llm.step({
+    const input: LlmStepInput = {
       system,
       messages: [...this.history],
       tools,
       signal,
-    });
+    };
+    if (responseFormat) {
+      input.responseFormat = responseFormat;
+    }
+    const iter = this.opts.llm.step(input);
     let text = '';
     const toolCalls: ToolCall[] = [];
     for await (const ev of iter) {
@@ -724,15 +762,42 @@ export class Runtime {
     signal?: AbortSignal,
     middlewareGuardrails?: Guardrail[]
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
-    const guardrails = this.getActiveGuardrails(middlewareGuardrails);
+    // Determine responseFormat and additional guardrails from structured output config
+    let responseFormat: LlmStepInput['responseFormat'] | undefined;
+    const structuredGuardrails: Guardrail[] = [];
+    if (this.opts.structuredOutput) {
+      const strategy = this.opts.structuredOutput.strategy ?? 'auto';
+      if (strategy === 'native' || strategy === 'auto') {
+        responseFormat = buildResponseFormat(this.opts.structuredOutput);
+      }
+      if (strategy === 'guardrail' || strategy === 'auto') {
+        structuredGuardrails.push(
+          jsonSchemaGuardrail({
+            schema: this.opts.structuredOutput.schema,
+            name: 'structured-output',
+            maxRetries: this.opts.structuredOutput.maxRetries ?? 2,
+          })
+        );
+      }
+    }
+
+    const guardrails = this.getActiveGuardrails(
+      middlewareGuardrails,
+      structuredGuardrails
+    );
     if (guardrails.length === 0) {
-      return this.runLlmStep(system, tools, signal);
+      return this.runLlmStep(system, tools, signal, responseFormat);
     }
 
     const DEFAULT_FEEDBACK =
       'Your response failed validation: {error}. Please try again.';
 
-    let lastResult = await this.runLlmStep(system, tools, signal);
+    let lastResult = await this.runLlmStep(
+      system,
+      tools,
+      signal,
+      responseFormat
+    );
 
     for (const guardrail of guardrails) {
       const maxRetries = guardrail.maxRetries ?? 2;
@@ -819,7 +884,12 @@ export class Runtime {
         this.history.push({ role: 'user', content: feedback });
 
         // Retry the LLM step
-        lastResult = await this.runLlmStep(system, tools, signal);
+        lastResult = await this.runLlmStep(
+          system,
+          tools,
+          signal,
+          responseFormat
+        );
       }
     }
 
@@ -828,14 +898,19 @@ export class Runtime {
 
   /**
    * Get the active guardrails — combines static guardrails from options
-   * with any dynamically added via middleware.
+   * with structured output guardrails and any dynamically added via middleware.
    */
-  private getActiveGuardrails(middlewareGuardrails?: Guardrail[]): Guardrail[] {
+  private getActiveGuardrails(
+    middlewareGuardrails?: Guardrail[],
+    structuredGuardrails?: Guardrail[]
+  ): Guardrail[] {
     const base = this.opts.guardrails ?? [];
-    if (middlewareGuardrails && middlewareGuardrails.length > 0) {
-      return [...base, ...middlewareGuardrails];
+    const structured = structuredGuardrails ?? [];
+    const middleware = middlewareGuardrails ?? [];
+    if (structured.length === 0 && middleware.length === 0) {
+      return base;
     }
-    return base;
+    return [...structured, ...base, ...middleware];
   }
 
   /**
@@ -977,9 +1052,24 @@ export class Runtime {
           tool_calls: turn.toolCalls,
         });
 
+        let sessionEnded = false;
         for (const call of turn.toolCalls) {
           this.throwIfAborted(signal);
-          await this.dispatchToolCall(call, nodeTools, signal);
+          const outcome = await this.dispatchToolCall(call, nodeTools, signal);
+          if (outcome.endSession) {
+            sessionEnded = true;
+            break;
+          }
+        }
+        if (sessionEnded) {
+          break;
+        }
+
+        // Escalation: @utils.escalate sets AgentScriptInternal_next_topic
+        // to '__human__'. Surface as a terminal event and stop the child loop.
+        if (this.state.get('AgentScriptInternal_next_topic') === '__human__') {
+          this.bus.emit({ kind: 'end-session' });
+          break;
         }
       }
 

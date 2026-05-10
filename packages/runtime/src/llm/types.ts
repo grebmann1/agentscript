@@ -49,6 +49,15 @@ export interface LlmStepInput {
   messages: Msg[];
   tools: ToolDef[];
   signal?: AbortSignal;
+  /** When set, instructs the LLM to respond in a structured format (native JSON mode). */
+  responseFormat?: {
+    type: 'json_schema';
+    json_schema: {
+      name: string;
+      schema: Record<string, unknown>;
+      strict: boolean;
+    };
+  };
 }
 
 export interface LlmDriver {
