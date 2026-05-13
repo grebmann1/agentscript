@@ -10,6 +10,10 @@
  * compares wall-clock durations to prove the parallel path is actually
  * concurrent.
  *
+ * NOTE: This test uses top-level await (no async main() wrapper). This is
+ * intentional -- tsx supports top-level await natively, and wrapping would
+ * add unnecessary indentation to a file that is already linear.
+ *
  * Run:
  *   pnpm exec tsx packages/runtime-vercel/examples/gateway-tests/test-parallel-timing.ts
  */

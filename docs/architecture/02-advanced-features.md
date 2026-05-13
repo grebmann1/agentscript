@@ -341,7 +341,7 @@ The runtime includes a built-in tracing system that produces W3C-compatible span
 `TracingContext` manages a tree of spans for a single trace using a stack-based model:
 
 ```typescript
-import { TracingContext, InMemorySpanExporter } from '@agentscript/runtime/tracing';
+import { TracingContext, InMemorySpanExporter } from '@agentscript/runtime';
 
 const exporter = new InMemorySpanExporter();
 const tracing = new TracingContext({
@@ -416,7 +416,7 @@ const exporter = new ConsoleSpanExporter();
 Exports spans as OTLP JSON over HTTP, compatible with Jaeger, Grafana Tempo, and other OTLP-capable backends:
 
 ```typescript
-import { OtlpJsonSpanExporter } from '@agentscript/runtime/tracing';
+import { OtlpJsonSpanExporter } from '@agentscript/runtime';
 
 const exporter = new OtlpJsonSpanExporter({
   url: 'http://localhost:4318/v1/traces',
@@ -431,7 +431,7 @@ The exporter formats spans into the OTLP `resourceSpans` envelope with nanosecon
 Fan out spans to multiple exporters simultaneously:
 
 ```typescript
-import { MultiSpanExporter, ConsoleSpanExporter, OtlpJsonSpanExporter } from '@agentscript/runtime/tracing';
+import { MultiSpanExporter, ConsoleSpanExporter, OtlpJsonSpanExporter } from '@agentscript/runtime';
 
 const exporter = new MultiSpanExporter([
   new ConsoleSpanExporter(),

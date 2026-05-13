@@ -11,7 +11,7 @@ import {
   type EventListener,
   type RuntimeEvent,
 } from '../events/types.js';
-import { ToolRegistry } from '../tools/registry.js';
+import type { ToolRegistry } from '../tools/registry.js';
 import {
   runSteps,
   makeScope,
@@ -50,7 +50,10 @@ import {
   DelegationDepthError,
   StateConflictError,
 } from '../delegation/errors.js';
-import type { ParallelDelegationOptions } from '../parallel/types.js';
+import type {
+  ParallelDelegationOptions,
+  ParallelDispatchOptions,
+} from '../parallel/types.js';
 import type {
   StructuredOutputOptions,
   ParsedStructuredOutput,
@@ -59,7 +62,6 @@ import {
   buildResponseFormat,
   parseStructuredOutput,
 } from '../structured-output/enforce.js';
-import type { ParallelDispatchOptions } from '../parallel/types.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
@@ -1178,7 +1180,6 @@ export class Runtime {
       childNodes: children.map(c => c.nodeName),
     });
 
-    const stateBefore = this.state.snapshot();
     const childController = new AbortController();
     const onParentAbort = () => childController.abort();
     signal?.addEventListener('abort', onParentAbort, { once: true });
@@ -1188,7 +1189,6 @@ export class Runtime {
         this.runIsolatedDelegation(
           child.nodeName,
           child.context,
-          stateBefore,
           childController.signal
         )
       );
@@ -1219,7 +1219,11 @@ export class Runtime {
       }
 
       // Merge state changes
-      const merged = this.mergeStateChanges(allChanges, stateMerge, parallelOpts.mergeFn);
+      const merged = this.mergeStateChanges(
+        allChanges,
+        stateMerge,
+        parallelOpts.mergeFn
+      );
       for (const [key, value] of Object.entries(merged)) {
         this.state.set(key, value);
       }
@@ -1243,7 +1247,6 @@ export class Runtime {
   private async runIsolatedDelegation(
     childNodeName: string,
     context: string | undefined,
-    _parentStateBefore: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<DelegationResult> {
     const childNode = this.graph.nodes.get(childNodeName);
@@ -1300,7 +1303,6 @@ export class Runtime {
 
     let assistantText = '';
     let steps = 0;
-    let currentNode = childNodeName;
 
     const node = this.requireNode(childNodeName);
     const actionUris = buildActionUriMap(node);
@@ -1405,7 +1407,7 @@ export class Runtime {
       const result: DelegationResult = {
         assistantText,
         stateChanges,
-        finalNode: currentNode,
+        finalNode: childNodeName,
         steps,
       };
 
@@ -1532,10 +1534,13 @@ export class Runtime {
   private mergeStateChanges(
     changes: Array<Record<string, unknown>>,
     strategy: 'last-wins' | 'error-on-conflict' | 'custom',
-    mergeFn?: (changes: Array<Record<string, unknown>>) => Record<string, unknown>
+    mergeFn?: (
+      changes: Array<Record<string, unknown>>
+    ) => Record<string, unknown>
   ): Record<string, unknown> {
     if (strategy === 'custom') {
-      if (!mergeFn) throw new Error('mergeFn required when stateMerge is "custom"');
+      if (!mergeFn)
+        throw new Error('mergeFn required when stateMerge is "custom"');
       return mergeFn(changes);
     }
 
@@ -1755,7 +1760,12 @@ export class Runtime {
   ): Promise<{
     call: ToolCall;
     endSession: boolean;
-    historyEntry: { role: string; tool_call_id: string; tool_name: string; content: string };
+    historyEntry: {
+      role: string;
+      tool_call_id: string;
+      tool_name: string;
+      content: string;
+    };
     stateWrites: Array<[string, unknown]>;
     error: boolean;
   }> {
@@ -1791,8 +1801,17 @@ export class Runtime {
 
     const def = tools.find(t => t.name === call.name);
     if (!def) {
-      this.bus.emit({ kind: 'tool-error', name: call.name, error: 'unknown tool' });
-      return makeResult(false, JSON.stringify({ error: 'unknown tool' }), [], true);
+      this.bus.emit({
+        kind: 'tool-error',
+        name: call.name,
+        error: 'unknown tool',
+      });
+      return makeResult(
+        false,
+        JSON.stringify({ error: 'unknown tool' }),
+        [],
+        true
+      );
     }
 
     // Merge compiler-bound args with LLM-provided args
@@ -1825,7 +1844,7 @@ export class Runtime {
     this.bus.emit({ kind: 'tool-call', name: def.target, args });
 
     let result: Record<string, unknown>;
-    let endSession = false;
+    const endSession = false;
 
     // For isolated dispatch, we don't handle sentinels (they're filtered out
     // by shouldDispatchParallel), but handle external tools
@@ -1846,12 +1865,30 @@ export class Runtime {
         } else if (errorResult?.suppress) {
           return makeResult(false, JSON.stringify({}));
         } else {
-          this.bus.emit({ kind: 'tool-error', name: def.target, error: String(err) });
-          return makeResult(false, JSON.stringify({ error: String(err) }), [], true);
+          this.bus.emit({
+            kind: 'tool-error',
+            name: def.target,
+            error: String(err),
+          });
+          return makeResult(
+            false,
+            JSON.stringify({ error: String(err) }),
+            [],
+            true
+          );
         }
       } else {
-        this.bus.emit({ kind: 'tool-error', name: def.target, error: String(err) });
-        return makeResult(false, JSON.stringify({ error: String(err) }), [], true);
+        this.bus.emit({
+          kind: 'tool-error',
+          name: def.target,
+          error: String(err),
+        });
+        return makeResult(
+          false,
+          JSON.stringify({ error: String(err) }),
+          [],
+          true
+        );
       }
     }
 

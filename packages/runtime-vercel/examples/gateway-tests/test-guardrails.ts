@@ -18,7 +18,6 @@ import {
   contentPolicyGuardrail,
   regexGuardrail,
   GuardrailExhaustionError,
-  ToolRegistry,
 } from '@agentscript/runtime';
 import {
   createGatewayConfig,
@@ -27,6 +26,7 @@ import {
   runTurn,
   assertions,
   report,
+  ToolRegistry,
 } from './harness.js';
 
 // ---------------------------------------------------------------------------

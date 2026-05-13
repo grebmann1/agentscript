@@ -13,7 +13,6 @@
  *   pnpm exec tsx packages/runtime-vercel/examples/gateway-tests/test-abort-and-timeout.ts
  */
 
-import { AbortError } from '@agentscript/runtime';
 import {
   createGatewayConfig,
   createLlmDriver,
@@ -22,6 +21,7 @@ import {
   mockTool,
   assertions,
   report,
+  AbortError,
 } from './harness.js';
 
 // ---------------------------------------------------------------------------

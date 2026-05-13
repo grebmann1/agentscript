@@ -394,8 +394,8 @@ export function report(suiteName: string): void {
   }
 }
 
-// Re-export useful types for test scripts
-export { AbortError };
+// Re-export useful types and classes for test scripts
+export { AbortError, ToolRegistry };
 export type {
   TurnResult,
   RuntimeEvent,

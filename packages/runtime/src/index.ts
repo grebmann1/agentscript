@@ -27,13 +27,6 @@ export { HttpAdapter } from './tools/http-adapter.js';
 export type { HttpAdapterOptions } from './tools/http-adapter.js';
 export { MockToolAdapter } from './tools/mock-adapter.js';
 
-export { loadGraph } from './graph/load.js';
-export type { LoadedGraph } from './graph/load.js';
-
-export { evalExpr, compileExpr } from './expr/eval.js';
-export type { EvalScope } from './expr/eval.js';
-export { renderTemplate, isTemplate } from './template/render.js';
-
 export type {
   LlmDriver,
   LlmStepInput,
@@ -46,7 +39,6 @@ export type {
   ToolDef,
 } from './llm/types.js';
 
-export { MiddlewarePipeline } from './middleware/pipeline.js';
 export type {
   Middleware,
   BeforeTurnContext,

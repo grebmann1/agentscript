@@ -15,7 +15,6 @@
  */
 
 import type {
-  Middleware,
   BeforeToolCallContext,
   BeforeToolCallResult,
 } from '@agentscript/runtime';
@@ -27,6 +26,7 @@ import {
   mockTool,
   assertions,
   report,
+  type Middleware,
 } from './harness.js';
 
 // ---------------------------------------------------------------------------

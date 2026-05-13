@@ -9,6 +9,10 @@
  * dispatches them concurrently (strategy: 'always') and the wall-clock time
  * is bounded by the slowest tool, NOT the sum of all tools.
  *
+ * NOTE: This test uses top-level await (no async main() wrapper). This is
+ * intentional -- tsx supports top-level await natively, and wrapping would
+ * add unnecessary indentation to a file that is already linear.
+ *
  * Run:
  *   pnpm exec tsx packages/runtime-vercel/examples/gateway-tests/test-parallel-tools.ts
  */

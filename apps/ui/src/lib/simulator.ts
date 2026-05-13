@@ -25,22 +25,6 @@ import {
 import type { LlmSettings } from '~/store/llmSettings';
 import type { ToolMock } from '~/store/agentStore';
 
-/**
- * Build a default tool registry containing generic-purpose fn:// adapters
- * that satisfy the tools referenced by the built-in example scripts.
- * Handlers are intentionally mocked — no network calls — so the playground
- * runs end-to-end without any real APIs or secrets. Anything not registered
- * surfaces as a tool-error row in the stream, which is informative rather
- * than fatal.
- */
-export function buildDefaultTools(): ToolRegistry {
-  const fn = new FnAdapter();
-  seedDefaultFnHandlers(fn);
-  const tools = new ToolRegistry();
-  tools.register('fn', fn);
-  return tools;
-}
-
 /** Populate an FnAdapter with the seeded demo handlers. */
 function seedDefaultFnHandlers(fn: FnAdapter): void {
   // ---- Generic demo tools ------------------------------------------------
@@ -253,9 +237,9 @@ function buildAdapters(providers: ToolProvider[]): Map<string, ToolAdapter> {
   seedDefaultFnHandlers(fn);
   adapters.set('fn', fn);
 
-  const active = providers.filter((p) => p.enabled && p.url.trim());
+  const active = providers.filter(p => p.enabled && p.url.trim());
 
-  const httpProvider = active.find((p) => p.type === 'http');
+  const httpProvider = active.find(p => p.type === 'http');
   if (httpProvider) {
     const headers = parseHeaders(httpProvider.headers);
     const httpAdapter = new HttpAdapter({ headers });
@@ -263,7 +247,7 @@ function buildAdapters(providers: ToolProvider[]): Map<string, ToolAdapter> {
     adapters.set('https', httpAdapter);
   }
 
-  const mcpProvider = active.find((p) => p.type === 'mcp');
+  const mcpProvider = active.find(p => p.type === 'mcp');
   if (mcpProvider) {
     const headers = parseHeaders(mcpProvider.headers);
     adapters.set('mcp', new McpBrowserAdapter(mcpProvider.url, headers));
