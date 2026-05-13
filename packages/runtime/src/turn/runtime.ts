@@ -48,7 +48,9 @@ import type {
 import {
   DelegationTimeoutError,
   DelegationDepthError,
+  StateConflictError,
 } from '../delegation/errors.js';
+import type { ParallelDelegationOptions } from '../parallel/types.js';
 import type {
   StructuredOutputOptions,
   ParsedStructuredOutput,
@@ -57,6 +59,7 @@ import {
   buildResponseFormat,
   parseStructuredOutput,
 } from '../structured-output/enforce.js';
+import type { ParallelDispatchOptions } from '../parallel/types.js';
 
 export interface ToolUsageLimit {
   /** Maximum number of times this tool may be invoked per scope. */
@@ -98,6 +101,8 @@ export interface RuntimeOptions {
   delegation?: DelegationOptions;
   /** Structured output enforcement configuration. */
   structuredOutput?: StructuredOutputOptions;
+  /** Parallel tool dispatch configuration. */
+  parallel?: ParallelDispatchOptions;
 }
 
 export interface TurnOptions {
@@ -457,23 +462,35 @@ export class Runtime {
           });
 
           let sessionEnded = false;
-          for (const call of turn.toolCalls) {
-            // CP-4: Check abort before each tool dispatch.
+          if (this.shouldDispatchParallel(turn.toolCalls, nodeTools)) {
             this.throwIfAborted(signal);
-            this.traceStart(`tool-call:${call.name}`, {
-              'tool.name': call.name,
-            });
-            const outcome = await this.dispatchToolCall(
-              call,
+            const parallel = await this.dispatchToolCallsParallel(
+              turn.toolCalls,
               nodeTools,
               signal
             );
-            this.traceEnd('ok');
-            if (outcome.endSession) {
-              sessionEnded = true;
-              break;
+            steps += parallel.steps;
+            sessionEnded = parallel.endSession;
+            if (steps > this.maxSteps) break outer;
+          } else {
+            for (const call of turn.toolCalls) {
+              // CP-4: Check abort before each tool dispatch.
+              this.throwIfAborted(signal);
+              this.traceStart(`tool-call:${call.name}`, {
+                'tool.name': call.name,
+              });
+              const outcome = await this.dispatchToolCall(
+                call,
+                nodeTools,
+                signal
+              );
+              this.traceEnd('ok');
+              if (outcome.endSession) {
+                sessionEnded = true;
+                break;
+              }
+              if (++steps > this.maxSteps) break outer;
             }
-            if (++steps > this.maxSteps) break outer;
           }
           if (sessionEnded) {
             // @utils.end_session fired — stop everything for this turn.
@@ -1128,6 +1145,743 @@ export class Runtime {
       });
       throw err;
     }
+  }
+
+  /**
+   * Delegate to multiple child nodes in parallel. Each child runs an isolated
+   * reasoning loop. State changes are merged after all children settle.
+   */
+  async delegateMultiple(
+    children: Array<{ nodeName: string; context?: string }>,
+    signal?: AbortSignal
+  ): Promise<DelegationResult[]> {
+    const parallelOpts: ParallelDelegationOptions =
+      this.opts.delegation?.parallel ?? {};
+    const failurePolicy = parallelOpts.failurePolicy ?? 'wait-all';
+    const stateMerge = parallelOpts.stateMerge ?? 'last-wins';
+
+    // Pre-validate: check all child nodes exist and depth is within limit
+    const defaultOpts = this.opts.delegation ?? {};
+    const maxDepth = defaultOpts.maxDepth ?? 5;
+    if (this.delegationStack.length >= maxDepth) {
+      throw new DelegationDepthError(this.delegationStack.length, maxDepth);
+    }
+    for (const child of children) {
+      if (!this.graph.nodes.get(child.nodeName)) {
+        throw new Error(`Delegation target node "${child.nodeName}" not found`);
+      }
+    }
+
+    this.bus.emit({
+      kind: 'parallel-delegation-start',
+      parentNode: this.currentNode,
+      childNodes: children.map(c => c.nodeName),
+    });
+
+    const stateBefore = this.state.snapshot();
+    const childController = new AbortController();
+    const onParentAbort = () => childController.abort();
+    signal?.addEventListener('abort', onParentAbort, { once: true });
+
+    try {
+      const promises = children.map(child =>
+        this.runIsolatedDelegation(
+          child.nodeName,
+          child.context,
+          stateBefore,
+          childController.signal
+        )
+      );
+
+      const settled = await Promise.allSettled(promises);
+
+      const delegationResults: DelegationResult[] = [];
+      const allChanges: Array<Record<string, unknown>> = [];
+
+      for (let i = 0; i < settled.length; i++) {
+        const outcome = settled[i];
+        if (outcome.status === 'fulfilled') {
+          delegationResults.push(outcome.value);
+          allChanges.push(outcome.value.stateChanges);
+        } else {
+          if (failurePolicy === 'fail-fast') {
+            childController.abort();
+            throw outcome.reason;
+          }
+          delegationResults.push({
+            assistantText: '',
+            stateChanges: {},
+            finalNode: children[i].nodeName,
+            steps: 0,
+          });
+          allChanges.push({});
+        }
+      }
+
+      // Merge state changes
+      const merged = this.mergeStateChanges(allChanges, stateMerge, parallelOpts.mergeFn);
+      for (const [key, value] of Object.entries(merged)) {
+        this.state.set(key, value);
+      }
+
+      this.bus.emit({
+        kind: 'parallel-delegation-end',
+        parentNode: this.currentNode,
+        childNodes: children.map(c => c.nodeName),
+        results: delegationResults.map(r => ({
+          finalNode: r.finalNode,
+          steps: r.steps,
+        })),
+      });
+
+      return delegationResults;
+    } finally {
+      signal?.removeEventListener('abort', onParentAbort);
+    }
+  }
+
+  private async runIsolatedDelegation(
+    childNodeName: string,
+    context: string | undefined,
+    _parentStateBefore: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<DelegationResult> {
+    const childNode = this.graph.nodes.get(childNodeName);
+    if (!childNode) {
+      throw new Error(`Delegation target node "${childNodeName}" not found`);
+    }
+
+    const defaultOpts = this.opts.delegation ?? {};
+    const maxDepth = defaultOpts.maxDepth ?? 5;
+    if (this.delegationStack.length >= maxDepth) {
+      throw new DelegationDepthError(this.delegationStack.length, maxDepth);
+    }
+
+    const maxSteps = defaultOpts.maxSteps ?? 10;
+    const shareHistory = defaultOpts.shareHistory ?? false;
+
+    const frame: DelegationFrame = {
+      parentNode: this.currentNode,
+      childNode: childNodeName,
+      parentHistory: Object.freeze([...this.history]),
+      depth: this.delegationStack.length + 1,
+      options: {
+        maxSteps,
+        maxDepth,
+        context: context ?? defaultOpts.context ?? '',
+        shareHistory,
+      },
+    };
+
+    this.bus.emit({
+      kind: 'delegation-start',
+      parentNode: frame.parentNode,
+      childNode: childNodeName,
+      depth: frame.depth,
+    });
+
+    // Each parallel child gets its own isolated history
+    const childHistory: Msg[] = [];
+    if (shareHistory) {
+      childHistory.push(...this.history);
+    }
+    if (context) {
+      childHistory.push({
+        role: 'user',
+        content: `[Delegation context: ${context}]`,
+      });
+    }
+
+    this.traceStart(`delegation:${childNodeName}`, {
+      'delegation.child': childNodeName,
+      'delegation.depth': frame.depth,
+      'delegation.parallel': true,
+    });
+
+    let assistantText = '';
+    let steps = 0;
+    let currentNode = childNodeName;
+
+    const node = this.requireNode(childNodeName);
+    const actionUris = buildActionUriMap(node);
+    const nodeTools = this.buildToolDefs(node, actionUris);
+    const resolveTarget = (ref: string): string => {
+      if (ref.includes('://') || ref === '__state_update_action__') return ref;
+      return actionUris.get(ref) ?? ref;
+    };
+    const baseStepOpts = {
+      state: this.state,
+      tools: this.opts.tools,
+      bus: this.bus,
+      resolveTarget,
+    };
+
+    try {
+      const preSteps = node.before_reasoning as Step[] | null;
+      await runSteps(preSteps, baseStepOpts);
+
+      // Take a per-child snapshot right before reasoning to track this child's mutations
+      const childStateBefore = this.state.snapshot();
+
+      while (true) {
+        if (signal?.aborted) {
+          throw new AbortError(signal.reason);
+        }
+        if (steps >= maxSteps) {
+          throw new DelegationTimeoutError(childNodeName, maxSteps, steps);
+        }
+
+        const system = this.buildSystemPrompt(node);
+        const enableScope = makeScope(this.state);
+        const visibleTools = nodeTools
+          .filter(t => isEnabled(t.enabled, enableScope))
+          .filter(t => {
+            if (!this.opts.toolLimits) return true;
+            const limit = this.opts.toolLimits[t.name];
+            if (!limit) return true;
+            return (this.toolCallCounts.get(t.name) ?? 0) < limit.maxCalls;
+          });
+        const effectiveTools: ToolDef[] = visibleTools.map(stripInternal);
+
+        // Use child's isolated history for the LLM step
+        const stepInput: LlmStepInput = {
+          system,
+          messages: childHistory,
+          tools: effectiveTools,
+        };
+        const turn = await this.collectLlmStep(stepInput, signal);
+        steps++;
+
+        assistantText += turn.text;
+
+        if (turn.toolCalls.length === 0) {
+          if (turn.text) {
+            childHistory.push({ role: 'assistant', content: turn.text });
+          }
+          break;
+        }
+
+        childHistory.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: turn.toolCalls,
+        });
+
+        let sessionEnded = false;
+        for (const call of turn.toolCalls) {
+          if (signal?.aborted) throw new AbortError(signal.reason);
+          const outcome = await this.dispatchToolCallForHistory(
+            call,
+            nodeTools,
+            childHistory,
+            signal
+          );
+          if (outcome.endSession) {
+            sessionEnded = true;
+            break;
+          }
+        }
+        if (sessionEnded) break;
+
+        if (this.state.get('AgentScriptInternal_next_topic') === '__human__') {
+          break;
+        }
+      }
+
+      const afterSteps = node.after_reasoning as Step[] | null;
+      await runSteps(afterSteps, baseStepOpts);
+
+      this.traceEnd('ok');
+
+      // Compute state changes relative to this child's pre-reasoning snapshot
+      const stateAfter = this.state.snapshot();
+      const stateChanges: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(stateAfter)) {
+        if (childStateBefore[key] !== value) {
+          stateChanges[key] = value;
+        }
+      }
+
+      const result: DelegationResult = {
+        assistantText,
+        stateChanges,
+        finalNode: currentNode,
+        steps,
+      };
+
+      this.bus.emit({
+        kind: 'delegation-end',
+        parentNode: this.currentNode,
+        childNode: childNodeName,
+        result,
+      });
+
+      return result;
+    } catch (err) {
+      this.traceEnd('error');
+      this.bus.emit({
+        kind: 'delegation-error',
+        parentNode: this.currentNode,
+        childNode: childNodeName,
+        error: String(err),
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Run an LLM step and collect the full turn result (text + tool calls).
+   * Similar to runLlmStep but separated for parallel delegation use.
+   */
+  private async collectLlmStep(
+    input: LlmStepInput,
+    signal?: AbortSignal
+  ): Promise<{ text: string; toolCalls: ToolCall[] }> {
+    let text = '';
+    const toolCalls: ToolCall[] = [];
+    for await (const event of this.opts.llm.step(input)) {
+      if (signal?.aborted) throw new AbortError(signal.reason);
+      if (event.kind === 'text-delta') text += event.text;
+      else if (event.kind === 'tool-call') toolCalls.push(event.call);
+      else if (event.kind === 'finish') break;
+    }
+    return { text, toolCalls };
+  }
+
+  /**
+   * Dispatch a single tool call and push the result to the provided history
+   * array (instead of this.history). Used by parallel delegation.
+   */
+  private async dispatchToolCallForHistory(
+    call: ToolCall,
+    tools: Array<
+      ToolDef & {
+        target: string;
+        bound?: Record<string, unknown>;
+        stateUpdates?: Array<Record<string, unknown>> | null;
+      }
+    >,
+    history: Msg[],
+    signal?: AbortSignal
+  ): Promise<{ endSession: boolean }> {
+    const def = tools.find(t => t.name === call.name);
+    if (!def) {
+      history.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        tool_name: call.name,
+        content: JSON.stringify({ error: 'unknown tool' }),
+      });
+      return { endSession: false };
+    }
+
+    const scope = makeScope(this.state);
+    const boundEvaluated: Record<string, unknown> = {};
+    if (def.bound) {
+      for (const [k, raw] of Object.entries(def.bound)) {
+        boundEvaluated[k] = evalBoundValue(raw, scope);
+      }
+    }
+    const args = { ...boundEvaluated, ...call.arguments };
+
+    let result: Record<string, unknown>;
+    let endSession = false;
+
+    if (def.target === '__state_update_action__') {
+      result = args;
+    } else if (def.target === '__end_session_action__') {
+      result = args;
+      endSession = true;
+    } else {
+      try {
+        result = await this.opts.tools.invoke(def.target, args, { signal });
+      } catch (err) {
+        history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          tool_name: call.name,
+          content: JSON.stringify({ error: String(err) }),
+        });
+        return { endSession: false };
+      }
+    }
+
+    // Apply state_updates
+    if (def.stateUpdates) {
+      const resultScope = makeScope(this.state, result!);
+      for (const entry of def.stateUpdates) {
+        for (const [name, raw] of Object.entries(entry)) {
+          this.state.set(name, evalBoundValue(raw, resultScope));
+        }
+      }
+    }
+
+    history.push({
+      role: 'tool',
+      tool_call_id: call.id,
+      tool_name: call.name,
+      content: JSON.stringify(result),
+    });
+
+    if (endSession) {
+      this.bus.emit({ kind: 'end-session' });
+    }
+    return { endSession };
+  }
+
+  private mergeStateChanges(
+    changes: Array<Record<string, unknown>>,
+    strategy: 'last-wins' | 'error-on-conflict' | 'custom',
+    mergeFn?: (changes: Array<Record<string, unknown>>) => Record<string, unknown>
+  ): Record<string, unknown> {
+    if (strategy === 'custom') {
+      if (!mergeFn) throw new Error('mergeFn required when stateMerge is "custom"');
+      return mergeFn(changes);
+    }
+
+    if (strategy === 'error-on-conflict') {
+      const merged: Record<string, unknown> = {};
+      const seen = new Map<string, number>();
+      for (let i = 0; i < changes.length; i++) {
+        for (const [key, value] of Object.entries(changes[i])) {
+          if (seen.has(key)) {
+            const prevIdx = seen.get(key)!;
+            if (changes[prevIdx][key] !== value) {
+              throw new StateConflictError(key, prevIdx, i);
+            }
+          }
+          seen.set(key, i);
+          merged[key] = value;
+        }
+      }
+      return merged;
+    }
+
+    // 'last-wins'
+    const merged: Record<string, unknown> = {};
+    for (const change of changes) {
+      Object.assign(merged, change);
+    }
+    return merged;
+  }
+
+  private shouldDispatchParallel(
+    calls: ToolCall[],
+    tools: Array<
+      ToolDef & {
+        target: string;
+        bound?: Record<string, unknown>;
+        stateUpdates?: Array<Record<string, unknown>> | null;
+      }
+    >
+  ): boolean {
+    const strategy = this.opts.parallel?.strategy ?? 'auto';
+    if (strategy === 'never') return false;
+    if (strategy === 'always') return calls.length > 1;
+    // 'auto': parallel only when safe
+    if (calls.length <= 1) return false;
+    const sequential = new Set(this.opts.parallel?.sequentialTools ?? []);
+    for (const call of calls) {
+      if (sequential.has(call.name)) return false;
+      const def = tools.find(t => t.name === call.name);
+      if (!def) continue;
+      if (
+        def.target === '__state_update_action__' ||
+        def.target === '__end_session_action__' ||
+        def.target.startsWith('delegate://') ||
+        def.target === '__delegate_action__'
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async dispatchToolCallsParallel(
+    calls: ToolCall[],
+    tools: Array<
+      ToolDef & {
+        target: string;
+        bound?: Record<string, unknown>;
+        stateUpdates?: Array<Record<string, unknown>> | null;
+      }
+    >,
+    signal?: AbortSignal
+  ): Promise<{ endSession: boolean; steps: number }> {
+    const failurePolicy = this.opts.parallel?.failurePolicy ?? 'wait-all';
+
+    this.bus.emit({
+      kind: 'parallel-dispatch-start',
+      node: this.currentNode,
+      toolNames: calls.map(c => c.name),
+    });
+
+    // Start a parent tracing span for the parallel batch
+    let parentSpanId: string | undefined;
+    if (this._tracingCtx) {
+      const parentSpan = this._tracingCtx.startSpan('parallel-tool-dispatch', {
+        'parallel.count': calls.length,
+      });
+      parentSpanId = parentSpan.spanId;
+    }
+
+    // Pre-check tool limits for all calls before dispatching any
+    const limitChecked: Array<{ call: ToolCall; blocked: boolean }> = [];
+    for (const call of calls) {
+      let blocked = false;
+      if (this.opts.toolLimits) {
+        const limit = this.opts.toolLimits[call.name];
+        if (limit) {
+          const count = this.toolCallCounts.get(call.name) ?? 0;
+          if (count >= limit.maxCalls) {
+            blocked = true;
+          }
+        }
+      }
+      limitChecked.push({ call, blocked });
+    }
+
+    // Create a child abort controller linked to the parent
+    const childController = new AbortController();
+    const onParentAbort = () => childController.abort();
+    signal?.addEventListener('abort', onParentAbort, { once: true });
+
+    try {
+      const promises = limitChecked.map(({ call, blocked }) => {
+        if (blocked) {
+          this.bus.emit({
+            kind: 'tool-limit-reached',
+            name: call.name,
+            limit: this.opts.toolLimits![call.name].maxCalls,
+          });
+          return Promise.resolve({
+            call,
+            endSession: false,
+            historyEntry: {
+              role: 'tool' as const,
+              tool_call_id: call.id,
+              tool_name: call.name,
+              content: JSON.stringify({
+                error: `Tool "${call.name}" has reached its usage limit. Choose a different approach.`,
+              }),
+            },
+            stateWrites: [] as Array<[string, unknown]>,
+            error: false,
+          });
+        }
+        return this.dispatchToolCallIsolated(
+          call,
+          tools,
+          childController.signal,
+          parentSpanId
+        );
+      });
+
+      const results = await Promise.allSettled(promises);
+
+      let endSession = false;
+      let stepCount = 0;
+
+      // Apply results in order for deterministic history
+      for (let i = 0; i < results.length; i++) {
+        const settled = results[i];
+        stepCount++;
+        if (settled.status === 'rejected') {
+          const call = calls[i];
+          this.bus.emit({
+            kind: 'tool-error',
+            name: call.name,
+            error: String(settled.reason),
+          });
+          this.history.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            tool_name: call.name,
+            content: JSON.stringify({ error: String(settled.reason) }),
+          });
+          if (failurePolicy === 'fail-fast') {
+            childController.abort();
+            break;
+          }
+        } else {
+          const outcome = settled.value;
+          // Apply state writes in order
+          for (const [key, value] of outcome.stateWrites) {
+            this.state.set(key, value);
+          }
+          this.history.push(outcome.historyEntry as Msg);
+          // Increment tool usage counter
+          if (!outcome.error) {
+            this.toolCallCounts.set(
+              outcome.call.name,
+              (this.toolCallCounts.get(outcome.call.name) ?? 0) + 1
+            );
+          }
+          if (outcome.endSession) {
+            endSession = true;
+            this.bus.emit({ kind: 'end-session' });
+          }
+        }
+      }
+
+      // End parent tracing span
+      if (this._tracingCtx && parentSpanId) {
+        this._tracingCtx.endSpan('ok');
+      }
+
+      this.bus.emit({
+        kind: 'parallel-dispatch-end',
+        node: this.currentNode,
+        toolNames: calls.map(c => c.name),
+      });
+
+      return { endSession, steps: stepCount };
+    } finally {
+      signal?.removeEventListener('abort', onParentAbort);
+    }
+  }
+
+  private async dispatchToolCallIsolated(
+    call: ToolCall,
+    tools: Array<
+      ToolDef & {
+        target: string;
+        bound?: Record<string, unknown>;
+        stateUpdates?: Array<Record<string, unknown>> | null;
+      }
+    >,
+    signal?: AbortSignal,
+    parentSpanId?: string
+  ): Promise<{
+    call: ToolCall;
+    endSession: boolean;
+    historyEntry: { role: string; tool_call_id: string; tool_name: string; content: string };
+    stateWrites: Array<[string, unknown]>;
+    error: boolean;
+  }> {
+    // Start a child span for this tool call
+    if (this._tracingCtx && parentSpanId) {
+      this._tracingCtx.startChildSpan(parentSpanId, `tool-call:${call.name}`, {
+        'tool.name': call.name,
+      });
+    }
+
+    const makeResult = (
+      endSession: boolean,
+      content: string,
+      stateWrites: Array<[string, unknown]> = [],
+      isError = false
+    ) => {
+      if (this._tracingCtx && parentSpanId) {
+        this._tracingCtx.endSpan(isError ? 'error' : 'ok');
+      }
+      return {
+        call,
+        endSession,
+        historyEntry: {
+          role: 'tool' as const,
+          tool_call_id: call.id,
+          tool_name: call.name,
+          content,
+        },
+        stateWrites,
+        error: isError,
+      };
+    };
+
+    const def = tools.find(t => t.name === call.name);
+    if (!def) {
+      this.bus.emit({ kind: 'tool-error', name: call.name, error: 'unknown tool' });
+      return makeResult(false, JSON.stringify({ error: 'unknown tool' }), [], true);
+    }
+
+    // Merge compiler-bound args with LLM-provided args
+    const scope = makeScope(this.state);
+    const boundEvaluated: Record<string, unknown> = {};
+    if (def.bound) {
+      for (const [k, raw] of Object.entries(def.bound)) {
+        boundEvaluated[k] = evalBoundValue(raw, scope);
+      }
+    }
+    const args = { ...boundEvaluated, ...call.arguments };
+
+    // beforeToolCall middleware
+    if (!this.pipeline.isEmpty) {
+      const beforeTc = await this.pipeline.runBeforeToolCall({
+        node: this.currentNode,
+        state: this.state.snapshot(),
+        target: def.target,
+        toolName: call.name,
+        args: { ...args },
+        toolCall: call,
+      });
+      if (beforeTc?.skip) return makeResult(false, JSON.stringify({}));
+      if (beforeTc?.abort) {
+        return makeResult(false, JSON.stringify(beforeTc.abort.result));
+      }
+      if (beforeTc?.args) Object.assign(args, beforeTc.args);
+    }
+
+    this.bus.emit({ kind: 'tool-call', name: def.target, args });
+
+    let result: Record<string, unknown>;
+    let endSession = false;
+
+    // For isolated dispatch, we don't handle sentinels (they're filtered out
+    // by shouldDispatchParallel), but handle external tools
+    try {
+      result = await this.opts.tools.invoke(def.target, args, { signal });
+    } catch (err) {
+      if (!this.pipeline.isEmpty) {
+        const errorResult = await this.pipeline.runOnError({
+          node: this.currentNode,
+          state: this.state.snapshot(),
+          error: err,
+          phase: 'tool-call',
+          toolName: call.name,
+          target: def.target,
+        });
+        if (errorResult?.suppress && errorResult.fallbackResult) {
+          result = errorResult.fallbackResult;
+        } else if (errorResult?.suppress) {
+          return makeResult(false, JSON.stringify({}));
+        } else {
+          this.bus.emit({ kind: 'tool-error', name: def.target, error: String(err) });
+          return makeResult(false, JSON.stringify({ error: String(err) }), [], true);
+        }
+      } else {
+        this.bus.emit({ kind: 'tool-error', name: def.target, error: String(err) });
+        return makeResult(false, JSON.stringify({ error: String(err) }), [], true);
+      }
+    }
+
+    // afterToolCall middleware
+    if (!this.pipeline.isEmpty) {
+      const afterTc = await this.pipeline.runAfterToolCall({
+        node: this.currentNode,
+        state: this.state.snapshot(),
+        target: def.target,
+        toolName: call.name,
+        args,
+        result: result!,
+      });
+      if (afterTc?.result) result = afterTc.result;
+    }
+
+    this.bus.emit({ kind: 'tool-result', name: def.target, result: result! });
+
+    // Collect state writes (deferred)
+    const stateWrites: Array<[string, unknown]> = [];
+    if (def.stateUpdates) {
+      const resultScope = makeScope(this.state, result!);
+      for (const entry of def.stateUpdates) {
+        for (const [name, raw] of Object.entries(entry)) {
+          stateWrites.push([name, evalBoundValue(raw, resultScope)]);
+        }
+      }
+    }
+
+    return makeResult(endSession, JSON.stringify(result), stateWrites);
   }
 
   private async dispatchToolCall(

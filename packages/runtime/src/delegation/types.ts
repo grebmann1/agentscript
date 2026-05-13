@@ -4,6 +4,7 @@
  */
 
 import type { Msg } from '../llm/types.js';
+import type { ParallelDelegationOptions } from '../parallel/types.js';
 
 export interface DelegationOptions {
   /** Max LLM steps the delegated node may take before timeout. Default: 10 */
@@ -14,6 +15,8 @@ export interface DelegationOptions {
   context?: string;
   /** Whether to share the parent's conversation history with the child. Default: false */
   shareHistory?: boolean;
+  /** Parallel delegation configuration. */
+  parallel?: ParallelDelegationOptions;
 }
 
 export interface DelegationFrame {
@@ -26,7 +29,7 @@ export interface DelegationFrame {
   /** Current depth in the delegation stack */
   depth: number;
   /** Options passed to this delegation */
-  options: Required<DelegationOptions>;
+  options: Required<Omit<DelegationOptions, 'parallel'>> & { parallel?: ParallelDelegationOptions };
 }
 
 export interface DelegationResult {

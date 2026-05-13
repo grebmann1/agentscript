@@ -88,6 +88,30 @@ export class TracingContext {
     return spans;
   }
 
+  /**
+   * Start a child span with an explicit parent (bypasses the stack).
+   * Used for parallel operations where multiple spans share a parent
+   * but don't nest sequentially.
+   */
+  startChildSpan(
+    parentSpanId: string,
+    name: string,
+    attributes?: Record<string, unknown>
+  ): Span {
+    const span: Span = {
+      name,
+      traceId: this.traceId,
+      spanId: generateSpanId(),
+      parentSpanId,
+      startTime: Date.now(),
+      status: 'unset',
+      attributes: attributes ?? {},
+      events: [],
+    };
+    this.stack.push(span);
+    return span;
+  }
+
   /** Get completed spans without flushing. */
   getCompleted(): ReadonlyArray<Span> {
     return this.completed;

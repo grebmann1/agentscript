@@ -25,3 +25,16 @@ export class DelegationDepthError extends Error {
     this.name = 'DelegationDepthError';
   }
 }
+
+export class StateConflictError extends Error {
+  constructor(
+    public readonly key: string,
+    public readonly writerA: number,
+    public readonly writerB: number
+  ) {
+    super(
+      `Parallel delegation conflict on key "${key}" between child ${writerA} and child ${writerB}`
+    );
+    this.name = 'StateConflictError';
+  }
+}

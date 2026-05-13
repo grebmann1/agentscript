@@ -116,7 +116,15 @@ export type {
 export {
   DelegationTimeoutError,
   DelegationDepthError,
+  StateConflictError,
 } from './delegation/errors.js';
+
+export type {
+  ParallelStrategy,
+  FailurePolicy,
+  ParallelDispatchOptions,
+  ParallelDelegationOptions,
+} from './parallel/types.js';
 
 export type {
   StructuredOutputOptions,

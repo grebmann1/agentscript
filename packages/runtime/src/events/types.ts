@@ -60,6 +60,27 @@ export type RuntimeEvent =
       error: string;
     }
   | {
+      kind: 'parallel-dispatch-start';
+      node: string;
+      toolNames: string[];
+    }
+  | {
+      kind: 'parallel-dispatch-end';
+      node: string;
+      toolNames: string[];
+    }
+  | {
+      kind: 'parallel-delegation-start';
+      parentNode: string;
+      childNodes: string[];
+    }
+  | {
+      kind: 'parallel-delegation-end';
+      parentNode: string;
+      childNodes: string[];
+      results: Array<{ finalNode: string; steps: number; error?: string }>;
+    }
+  | {
       kind: 'span-start';
       traceId: string;
       spanId: string;
