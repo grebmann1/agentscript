@@ -1,3 +1,4 @@
+/* eslint-disable no-console, @typescript-eslint/require-await */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -193,11 +194,7 @@ console.log(`  Text:         "${sequential.assistantText.slice(0, 50)}"`);
 console.log('');
 
 // Run 1: parallel
-assertions.gte(
-  parallel.toolsCalled.length,
-  2,
-  'parallel: both tools called'
-);
+assertions.gte(parallel.toolsCalled.length, 2, 'parallel: both tools called');
 assertions.lt(
   parallel.durationMs,
   700,

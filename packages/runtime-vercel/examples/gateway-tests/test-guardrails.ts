@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -96,13 +97,13 @@ async function testGuardrailPass(): Promise<void> {
   assertions.ok(
     errorThrown === undefined,
     'No error thrown (guardrail passed)',
-    errorThrown ? `error: ${errorThrown.message}` : undefined,
+    errorThrown ? `error: ${errorThrown.message}` : undefined
   );
 
   if (capture) {
     assertions.truthy(
       capture.result.assistantText.length > 0,
-      'Response text is non-empty',
+      'Response text is non-empty'
     );
 
     // Check that guardrail-pass event was emitted
@@ -112,7 +113,7 @@ async function testGuardrailPass(): Promise<void> {
     assertions.gte(
       guardrailPassEvents.length,
       1,
-      'At least one guardrail-pass event emitted',
+      'At least one guardrail-pass event emitted'
     );
 
     // Check that no guardrail-fail events occurred
@@ -122,7 +123,7 @@ async function testGuardrailPass(): Promise<void> {
     assertions.eq(
       guardrailFailEvents.length,
       0,
-      'No guardrail-fail events (clean pass)',
+      'No guardrail-fail events (clean pass)'
     );
   }
 }
@@ -158,26 +159,26 @@ async function testGuardrailFail(): Promise<void> {
 
   const err = await assertions.throwsAsync(
     () => runTurn(runtime, 'Hello!').then(c => c.result),
-    'GuardrailExhaustionError is thrown after retries',
+    'GuardrailExhaustionError is thrown after retries'
   );
 
   if (err) {
     assertions.instanceOf(
       err,
       GuardrailExhaustionError,
-      'Error is a GuardrailExhaustionError instance',
+      'Error is a GuardrailExhaustionError instance'
     );
 
     if (err instanceof GuardrailExhaustionError) {
       assertions.eq(
         err.guardrailName,
         'impossible-regex',
-        'Error references the correct guardrail name',
+        'Error references the correct guardrail name'
       );
       assertions.gte(
         err.attempts,
         2,
-        'Error reports >= 2 attempts (initial + retries)',
+        'Error reports >= 2 attempts (initial + retries)'
       );
     }
   }

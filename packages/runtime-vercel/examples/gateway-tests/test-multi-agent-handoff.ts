@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -142,7 +143,7 @@ async function main(): Promise<void> {
   console.log(`Model:   ${cfg.model}\n`);
 
   // Mock tools with delays
-  const { tools, callLog } = mockTool({
+  const { tools } = mockTool({
     search_flights: {
       delayMs: 200,
       result: { flight: 'AA-100', price: 450, departure: '10:30 AM' },
@@ -185,8 +186,13 @@ async function main(): Promise<void> {
       console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
     } else if (e.kind === 'tool-result') {
       console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
-    } else if (e.kind === 'state-change' && !e.name.startsWith('AgentScriptInternal_')) {
-      console.log(`  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`);
+    } else if (
+      e.kind === 'state-change' &&
+      !e.name.startsWith('AgentScriptInternal_')
+    ) {
+      console.log(
+        `  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`
+      );
     } else if (e.kind === 'tool-error') {
       console.log(`  [tool-err]   ${e.name}: ${e.error}`);
     }
@@ -206,11 +212,12 @@ async function main(): Promise<void> {
   );
   const routerIdx = nodeTrail.indexOf('router');
   const travelIdx = nodeTrail.indexOf('travel_agent');
-  const handoffViaTrail = routerIdx >= 0 && travelIdx >= 0 && routerIdx < travelIdx;
+  const handoffViaTrail =
+    routerIdx >= 0 && travelIdx >= 0 && routerIdx < travelIdx;
   assertions.ok(
     handoffViaEvent || handoffViaTrail,
     'handoff from router to travel_agent',
-    `handoff events: ${JSON.stringify(handoffs)}, node trail: [${nodeTrail.join(' -> ')}]`,
+    `handoff events: ${JSON.stringify(handoffs)}, node trail: [${nodeTrail.join(' -> ')}]`
   );
 
   // 2. search_flights was called (may need a follow-up turn after handoff)
@@ -221,11 +228,16 @@ async function main(): Promise<void> {
   if (!flightCalled) {
     // After handoff the new node may need another turn to trigger the tool
     console.log('\n--- Turn 2: follow-up after handoff ---\n');
-    const capture2 = await runTurn(runtime, 'Yes, find me a flight to Paris please');
+    const capture2 = await runTurn(
+      runtime,
+      'Yes, find me a flight to Paris please'
+    );
     console.log(`  Duration: ${capture2.durationMs}ms`);
     for (const e of capture2.events) {
-      if (e.kind === 'tool-call') console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
-      else if (e.kind === 'tool-result') console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
+      if (e.kind === 'tool-call')
+        console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
+      else if (e.kind === 'tool-result')
+        console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
     }
     flightCalled = capture2.events.some(
       e => e.kind === 'tool-call' && e.name === 'fn://search_flights'
@@ -235,34 +247,32 @@ async function main(): Promise<void> {
   assertions.ok(
     flightCalled,
     'search_flights was called',
-    `tool calls: ${[...capture.events].filter(e => e.kind === 'tool-call').map(e => e.kind === 'tool-call' ? e.name : '').join(', ') || '(none)'}`,
+    `tool calls: ${
+      [...capture.events]
+        .filter(e => e.kind === 'tool-call')
+        .map(e => (e.kind === 'tool-call' ? e.name : ''))
+        .join(', ') || '(none)'
+    }`
   );
 
   // 3. lookup_order was NOT called (correct routing)
   const orderCalled = capture.events.some(
     e => e.kind === 'tool-call' && e.name === 'fn://lookup_order'
   );
-  assertions.ok(
-    !orderCalled,
-    'lookup_order was NOT called (correct routing)',
-  );
+  assertions.ok(!orderCalled, 'lookup_order was NOT called (correct routing)');
 
   // 4. Final node is travel_agent
   assertions.eq(
     capture.result.finalNode,
     'travel_agent',
-    'final node is travel_agent',
+    'final node is travel_agent'
   );
 
   // 5. No error events
   const errorEvents = capture.events.filter(
     e => e.kind === 'tool-error' || e.kind === 'abort'
   );
-  assertions.eq(
-    errorEvents.length,
-    0,
-    'no error events emitted',
-  );
+  assertions.eq(errorEvents.length, 0, 'no error events emitted');
 
   // -------------------------------------------------------------------------
   // Report

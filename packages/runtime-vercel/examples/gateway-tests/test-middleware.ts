@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -13,7 +14,11 @@
  *   pnpm exec tsx packages/runtime-vercel/examples/gateway-tests/test-middleware.ts
  */
 
-import type { Middleware, BeforeToolCallContext, BeforeToolCallResult } from '@agentscript/runtime';
+import type {
+  Middleware,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+} from '@agentscript/runtime';
 import {
   createGatewayConfig,
   createLlmDriver,
@@ -137,7 +142,8 @@ async function main(): Promise<void> {
   // Middleware
   const toolCallLog: ToolCallAttempt[] = [];
   const loggingMw = createLoggingMiddleware(toolCallLog);
-  const { middleware: rateLimitMw, executedCount } = createRateLimitMiddleware(2);
+  const { middleware: rateLimitMw, executedCount } =
+    createRateLimitMiddleware(2);
 
   // Build runtime with middleware
   const runtime = createTestAgent({
@@ -170,14 +176,14 @@ async function main(): Promise<void> {
   assertions.gte(
     toolCallLog.length,
     2,
-    'Logging middleware captured >= 2 tool call attempts',
+    'Logging middleware captured >= 2 tool call attempts'
   );
 
   // 2. Rate-limit middleware was invoked (executedCount >= 2).
   assertions.gte(
     executedCount(),
     2,
-    'Rate-limit middleware processed >= 2 calls',
+    'Rate-limit middleware processed >= 2 calls'
   );
 
   // 3. If the model attempted a 3rd call, the rate-limiter should have
@@ -191,13 +197,13 @@ async function main(): Promise<void> {
     assertions.ok(
       toolResultEvents.length <= 2,
       'At most 2 tool-result events (3rd blocked by rate-limit)',
-      `got ${toolResultEvents.length} tool-result events`,
+      `got ${toolResultEvents.length} tool-result events`
     );
 
     // 4. The turn completed without a fatal error.
     assertions.truthy(
       capture.result.assistantText !== undefined,
-      'Turn produced assistant text (no fatal error)',
+      'Turn produced assistant text (no fatal error)'
     );
   }
 
@@ -205,7 +211,7 @@ async function main(): Promise<void> {
   assertions.ok(
     errorThrown === undefined,
     'No fatal error thrown (rate-limit is graceful)',
-    errorThrown ? `error: ${errorThrown.message}` : undefined,
+    errorThrown ? `error: ${errorThrown.message}` : undefined
   );
 
   // 6. All logged tool calls target the calculate tool.
@@ -213,7 +219,7 @@ async function main(): Promise<void> {
   assertions.ok(
     allCalculate,
     'All logged tool calls target the calculate action',
-    `toolNames: ${toolCallLog.map(t => t.toolName).join(', ')}`,
+    `toolNames: ${toolCallLog.map(t => t.toolName).join(', ')}`
   );
 
   report('test-middleware');

@@ -1,3 +1,4 @@
+/* eslint-disable no-console, @typescript-eslint/require-await */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -179,7 +180,9 @@ const runtime = createTestAgent({
 
 console.log('=== test-parallel-tools ===');
 console.log('Config: parallel strategy = "always"');
-console.log('Tools:  search_web (300ms), search_database (200ms), search_cache (100ms)');
+console.log(
+  'Tools:  search_web (300ms), search_database (200ms), search_cache (100ms)'
+);
 console.log('Expected: all 3 tools called in parallel, total < 500ms\n');
 
 const { result, events, durationMs } = await runTurn(
@@ -212,11 +215,7 @@ assertions.ok(
 
 // 2. Total tool results = 3
 const toolResultEvents = events.filter(e => e.kind === 'tool-result');
-assertions.eq(
-  toolResultEvents.length,
-  3,
-  'totalToolCalls(events, 3)'
-);
+assertions.eq(toolResultEvents.length, 3, 'totalToolCalls(events, 3)');
 
 // 3. Timing: total < 500ms proves parallel (sequential would be >= 600ms)
 assertions.lt(
@@ -226,20 +225,14 @@ assertions.lt(
 );
 
 // 4. Parallel dispatch events were emitted
-const parallelStarts = events.filter(
-  e => e.kind === 'parallel-dispatch-start'
-);
+const parallelStarts = events.filter(e => e.kind === 'parallel-dispatch-start');
 const parallelEnds = events.filter(e => e.kind === 'parallel-dispatch-end');
 assertions.eq(
   parallelStarts.length,
   1,
   'parallel-dispatch-start event emitted'
 );
-assertions.eq(
-  parallelEnds.length,
-  1,
-  'parallel-dispatch-end event emitted'
-);
+assertions.eq(parallelEnds.length, 1, 'parallel-dispatch-end event emitted');
 
 // 5. No errors
 const errorEvents = events.filter(e => e.kind === 'tool-error');

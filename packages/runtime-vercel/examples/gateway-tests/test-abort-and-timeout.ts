@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -137,8 +138,11 @@ async function testAbortMidExecution(): Promise<void> {
 
   const start = Date.now();
   const err = await assertions.throwsAsync(
-    () => runTurn(runtime, 'Process this', { signal: controller.signal }).then(c => c.result),
-    'AbortError (or similar) is thrown on abort',
+    () =>
+      runTurn(runtime, 'Process this', { signal: controller.signal }).then(
+        c => c.result
+      ),
+    'AbortError (or similar) is thrown on abort'
   );
   const elapsed = Date.now() - start;
   clearTimeout(abortTimer);
@@ -160,15 +164,11 @@ async function testAbortMidExecution(): Promise<void> {
     assertions.ok(
       isAbortRelated,
       'Error is abort-related',
-      `type: ${typeof err === 'string' ? 'String' : err.constructor?.name}, name: ${errName || '(none)'}, message: ${errMsg || errStr}`,
+      `type: ${typeof err === 'string' ? 'String' : err.constructor?.name}, name: ${errName || '(none)'}, message: ${errMsg || errStr}`
     );
   }
 
-  assertions.lt(
-    elapsed,
-    3000,
-    'Execution aborted quickly (< 3000ms)',
-  );
+  assertions.lt(elapsed, 3000, 'Execution aborted quickly (< 3000ms)');
 
   console.log(`  Duration: ${elapsed}ms\n`);
 }
@@ -198,8 +198,11 @@ async function testTimeout(): Promise<void> {
 
   const start = Date.now();
   const err = await assertions.throwsAsync(
-    () => runTurn(runtime, 'Process this', { signal: AbortSignal.timeout(300) }).then(c => c.result),
-    'Timeout error is thrown',
+    () =>
+      runTurn(runtime, 'Process this', {
+        signal: AbortSignal.timeout(300),
+      }).then(c => c.result),
+    'Timeout error is thrown'
   );
   const elapsed = Date.now() - start;
 
@@ -214,15 +217,11 @@ async function testTimeout(): Promise<void> {
     assertions.ok(
       isAbortRelated,
       'Error is abort/timeout-related',
-      `type: ${err.constructor.name}, name: ${err.name}, message: ${err.message}`,
+      `type: ${err.constructor.name}, name: ${err.name}, message: ${err.message}`
     );
   }
 
-  assertions.lt(
-    elapsed,
-    3000,
-    'Timeout fired quickly (< 3000ms)',
-  );
+  assertions.lt(elapsed, 3000, 'Timeout fired quickly (< 3000ms)');
 
   console.log(`  Duration: ${elapsed}ms\n`);
 }
@@ -263,35 +262,32 @@ async function testNormalCompletion(): Promise<void> {
   assertions.ok(
     errorThrown === undefined,
     'No error thrown on normal completion',
-    errorThrown ? `error: ${errorThrown.message}` : undefined,
+    errorThrown ? `error: ${errorThrown.message}` : undefined
   );
 
   if (capture) {
     assertions.truthy(
       capture.result.assistantText.length > 0,
-      'Assistant produced text',
+      'Assistant produced text'
     );
 
-    assertions.truthy(
-      capture.result.finalNode,
-      'Turn has a final node',
-    );
+    assertions.truthy(capture.result.finalNode, 'Turn has a final node');
 
     // Tool call is expected but model-dependent — log as info, not hard fail
     const toolCallEvents = capture.events.filter(e => e.kind === 'tool-call');
     if (toolCallEvents.length > 0) {
-      console.log(`  [info] Tool called: ${toolCallEvents.length} tool-call event(s)`);
+      console.log(
+        `  [info] Tool called: ${toolCallEvents.length} tool-call event(s)`
+      );
     } else {
-      console.log(`  [info] Model did not call tool (non-deterministic, not a failure)`);
+      console.log(
+        `  [info] Model did not call tool (non-deterministic, not a failure)`
+      );
     }
 
     // No abort events
     const abortEvents = capture.events.filter(e => e.kind === 'abort');
-    assertions.eq(
-      abortEvents.length,
-      0,
-      'No abort events emitted',
-    );
+    assertions.eq(abortEvents.length, 0, 'No abort events emitted');
   }
 }
 

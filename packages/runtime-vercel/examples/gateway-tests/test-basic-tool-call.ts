@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -101,7 +102,7 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   // Run turn
   // -------------------------------------------------------------------------
-  console.log('> user: What\'s the status of order ORD-123?\n');
+  console.log("> user: What's the status of order ORD-123?\n");
 
   const capture = await runTurn(runtime, "What's the status of order ORD-123?");
 
@@ -114,8 +115,13 @@ async function main(): Promise<void> {
       console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
     } else if (e.kind === 'tool-result') {
       console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
-    } else if (e.kind === 'state-change' && !e.name.startsWith('AgentScriptInternal_')) {
-      console.log(`  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`);
+    } else if (
+      e.kind === 'state-change' &&
+      !e.name.startsWith('AgentScriptInternal_')
+    ) {
+      console.log(
+        `  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`
+      );
     } else if (e.kind === 'tool-error') {
       console.log(`  [tool-err]   ${e.name}: ${e.error}`);
     }
@@ -128,13 +134,13 @@ async function main(): Promise<void> {
 
   // 1. lookup_order was called (tool-call events use the resolved target: fn://lookup_order)
   const toolCallEvents = capture.events.filter(e => e.kind === 'tool-call');
-  const lookupCalled = toolCallEvents.some(e =>
-    e.kind === 'tool-call' && e.name === 'fn://lookup_order'
+  const lookupCalled = toolCallEvents.some(
+    e => e.kind === 'tool-call' && e.name === 'fn://lookup_order'
   );
   assertions.ok(
     lookupCalled,
     'lookup_order was called',
-    `tool-call events: ${toolCallEvents.map(e => e.kind === 'tool-call' ? e.name : '').join(', ') || '(none)'}`,
+    `tool-call events: ${toolCallEvents.map(e => (e.kind === 'tool-call' ? e.name : '')).join(', ') || '(none)'}`
   );
 
   // 2. lookup_order received args containing "ORD-123"
@@ -148,26 +154,18 @@ async function main(): Promise<void> {
   assertions.ok(
     argsContainOrderNumber,
     'lookup_order called with order_number containing "ORD-123"',
-    `invocations: ${JSON.stringify(lookupInvocations.map(c => c.args))}`,
+    `invocations: ${JSON.stringify(lookupInvocations.map(c => c.args))}`
   );
 
   // 3. State order_status equals "shipped"
   const orderStatus = runtime.state.get('order_status');
-  assertions.eq(
-    orderStatus,
-    'shipped',
-    'state order_status equals "shipped"',
-  );
+  assertions.eq(orderStatus, 'shipped', 'state order_status equals "shipped"');
 
   // 4. No error events
   const errorEvents = capture.events.filter(
     e => e.kind === 'tool-error' || e.kind === 'abort'
   );
-  assertions.eq(
-    errorEvents.length,
-    0,
-    'no error events emitted',
-  );
+  assertions.eq(errorEvents.length, 0, 'no error events emitted');
 
   // -------------------------------------------------------------------------
   // Report

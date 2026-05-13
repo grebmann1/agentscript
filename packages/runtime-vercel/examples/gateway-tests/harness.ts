@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -266,9 +267,7 @@ export async function runTurn(
  * @param specs - Map of tool names to { delayMs?, result }
  * @returns ToolRegistry and a callLog that records every invocation
  */
-export function mockTool(
-  specs: Record<string, MockToolSpec>
-): {
+export function mockTool(specs: Record<string, MockToolSpec>): {
   tools: ToolRegistry;
   callLog: Array<{ name: string; args: unknown; timestamp: number }>;
 } {

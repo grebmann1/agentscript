@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /*
  * Copyright (c) 2026, Salesforce, Inc.
  * SPDX-License-Identifier: Apache-2.0
@@ -151,11 +152,18 @@ async function main(): Promise<void> {
       console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
     } else if (e.kind === 'tool-result') {
       console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
-    } else if (e.kind === 'state-change' && !e.name.startsWith('AgentScriptInternal_')) {
-      console.log(`  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`);
+    } else if (
+      e.kind === 'state-change' &&
+      !e.name.startsWith('AgentScriptInternal_')
+    ) {
+      console.log(
+        `  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`
+      );
     }
   }
-  console.log(`  State: authenticated=${runtime.state.get('authenticated')}, balance=${JSON.stringify(runtime.state.get('balance'))}`);
+  console.log(
+    `  State: authenticated=${runtime.state.get('authenticated')}, balance=${JSON.stringify(runtime.state.get('balance'))}`
+  );
   console.log('');
 
   // -------------------------------------------------------------------------
@@ -178,11 +186,18 @@ async function main(): Promise<void> {
         console.log(`  [tool-call]  ${e.name}(${JSON.stringify(e.args)})`);
       } else if (e.kind === 'tool-result') {
         console.log(`  [tool-res]   ${e.name} -> ${JSON.stringify(e.result)}`);
-      } else if (e.kind === 'state-change' && !e.name.startsWith('AgentScriptInternal_')) {
-        console.log(`  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`);
+      } else if (
+        e.kind === 'state-change' &&
+        !e.name.startsWith('AgentScriptInternal_')
+      ) {
+        console.log(
+          `  [state]      ${e.name}: ${JSON.stringify(e.before)} -> ${JSON.stringify(e.after)}`
+        );
       }
     }
-    console.log(`  State: authenticated=${runtime.state.get('authenticated')}, balance=${JSON.stringify(runtime.state.get('balance'))}`);
+    console.log(
+      `  State: authenticated=${runtime.state.get('authenticated')}, balance=${JSON.stringify(runtime.state.get('balance'))}`
+    );
     console.log('');
   }
 
@@ -194,19 +209,13 @@ async function main(): Promise<void> {
   const authCalled = allEvents.some(
     e => e.kind === 'tool-call' && e.name === 'fn://authenticate'
   );
-  assertions.ok(
-    authCalled,
-    'authenticate was called',
-  );
+  assertions.ok(authCalled, 'authenticate was called');
 
   // 2. check_balance was called
   const balanceCalled = allEvents.some(
     e => e.kind === 'tool-call' && e.name === 'fn://check_balance'
   );
-  assertions.ok(
-    balanceCalled,
-    'check_balance was called',
-  );
+  assertions.ok(balanceCalled, 'check_balance was called');
 
   // 3. authenticate was called before check_balance (ordering via callLog timestamps)
   const authEntry = callLog.find(c => c.name === 'authenticate');
@@ -215,42 +224,42 @@ async function main(): Promise<void> {
     assertions.ok(
       authEntry.timestamp <= balanceEntry.timestamp,
       'authenticate called before check_balance',
-      `auth at ${authEntry.timestamp}, balance at ${balanceEntry.timestamp}`,
+      `auth at ${authEntry.timestamp}, balance at ${balanceEntry.timestamp}`
     );
   } else {
     assertions.ok(
       false,
       'authenticate called before check_balance',
-      `auth invoked: ${!!authEntry}, balance invoked: ${!!balanceEntry}`,
+      `auth invoked: ${!!authEntry}, balance invoked: ${!!balanceEntry}`
     );
   }
 
   // 4. State balance contains expected value
   const balanceState = runtime.state.get('balance');
-  const balanceStr = typeof balanceState === 'string' ? balanceState : String(balanceState ?? '');
-  const balanceValid = balanceStr.includes('1,234') || balanceStr.includes('1234');
+  const balanceStr =
+    typeof balanceState === 'string'
+      ? balanceState
+      : String(balanceState ?? '');
+  const balanceValid =
+    balanceStr.includes('1,234') || balanceStr.includes('1234');
   assertions.ok(
     balanceValid,
     'state balance contains "$1,234" or "1234"',
-    `actual: ${JSON.stringify(balanceState)}`,
+    `actual: ${JSON.stringify(balanceState)}`
   );
 
   // 5. State authenticated is true
   assertions.eq(
     runtime.state.get('authenticated'),
     true,
-    'state authenticated is true',
+    'state authenticated is true'
   );
 
   // 6. No error events across all turns
   const errorEvents = allEvents.filter(
     e => e.kind === 'tool-error' || e.kind === 'abort'
   );
-  assertions.eq(
-    errorEvents.length,
-    0,
-    'no error events across all turns',
-  );
+  assertions.eq(errorEvents.length, 0, 'no error events across all turns');
 
   // -------------------------------------------------------------------------
   // Report
