@@ -9,10 +9,13 @@ import { generateText, jsonSchema } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
   FnAdapter,
+  HttpAdapter,
   MockToolAdapter,
   ToolRegistry,
   type ToolAdapter,
 } from '@agentscript/runtime';
+import { McpBrowserAdapter } from './mcp-browser-adapter';
+import type { ToolProvider } from '~/store/toolProviderStore';
 import {
   compileSource,
   createAgent,
@@ -149,18 +152,17 @@ export interface BuildAgentResult {
 }
 
 /**
- * Wrap a scheme-keyed ToolRegistry so every scheme's adapter is preceded by
- * a MockToolAdapter consulting the given exact-target → response map. Unmocked
- * targets fall through to the original adapter (or a new FnAdapter stub for
- * schemes that didn't have one).
+ * Build a complete ToolRegistry from providers and mocks in a single pass.
+ * Composition: adapters (fn + providers) → wrapped with MockToolAdapter where mocks exist.
+ * Mocks take priority; unmocked targets fall through to the real adapter.
  */
-export function buildToolsFromMocks(
+export function buildToolRegistry(
   mocks: ToolMock[],
-  base: ToolRegistry = buildDefaultTools()
+  providers: ToolProvider[]
 ): { tools: ToolRegistry; invalidMocks: BuildAgentResult['invalidMocks'] } {
   const invalidMocks: BuildAgentResult['invalidMocks'] = [];
   const parsed = new Map<string, Record<string, unknown>>();
-  const schemes = new Set<string>();
+  const mockedSchemes = new Set<string>();
 
   for (const mock of mocks) {
     if (!mock.enabled) continue;
@@ -192,44 +194,39 @@ export function buildToolsFromMocks(
       continue;
     }
     parsed.set(mock.target, value as Record<string, unknown>);
-    schemes.add(mock.target.slice(0, mock.target.indexOf('://')));
+    mockedSchemes.add(mock.target.slice(0, mock.target.indexOf('://')));
   }
 
+  // Build the canonical set of adapters (fn + providers)
+  const adapters = buildAdapters(providers);
+
+  // If no mocks, register adapters directly and return
   if (parsed.size === 0) {
-    return { tools: base, invalidMocks };
+    const tools = new ToolRegistry();
+    for (const [scheme, adapter] of adapters) {
+      tools.register(scheme, adapter);
+    }
+    return { tools, invalidMocks };
   }
 
-  // Read back the adapters we need from the base registry by probing it.
-  // The registry doesn't expose a getter, so we keep a parallel map while we
-  // build — callers always go through buildDefaultTools() which we re-create
-  // here to access its adapters.
-  const wrapped = new ToolRegistry();
-  const defaults = buildDefaultAdapters();
-
-  // Copy over every scheme currently in the base registry. We can't enumerate
-  // it, so instead we re-register both (a) the defaults, (b) a mock adapter
-  // per scheme that mocks reference.
-  for (const [scheme, adapter] of defaults) {
-    const mockForScheme = new MockToolAdapter(
-      scopeMocks(parsed, scheme),
-      adapter
-    );
-    wrapped.register(scheme, mockForScheme);
+  // Wrap each adapter with a MockToolAdapter for its scheme's mocks
+  const tools = new ToolRegistry();
+  for (const [scheme, adapter] of adapters) {
+    const schemeMocks = scopeMocks(parsed, scheme);
+    if (schemeMocks.size > 0) {
+      tools.register(scheme, new MockToolAdapter(schemeMocks, adapter));
+    } else {
+      tools.register(scheme, adapter);
+    }
   }
 
-  // Schemes referenced by mocks but missing from defaults: register with no
-  // fallback (the user wants only mocked targets for that scheme to work).
-  for (const scheme of schemes) {
-    if (defaults.has(scheme)) continue;
-    wrapped.register(scheme, new MockToolAdapter(scopeMocks(parsed, scheme)));
+  // Schemes referenced by mocks but missing from adapters: mock-only (no fallback)
+  for (const scheme of mockedSchemes) {
+    if (adapters.has(scheme)) continue;
+    tools.register(scheme, new MockToolAdapter(scopeMocks(parsed, scheme)));
   }
 
-  // Intentionally ignore `base` on this path: we've rebuilt defaults ourselves
-  // so the wrapped registry is self-consistent. If a caller ever needs to pass
-  // a custom base, we can thread its adapters through instead.
-  void base;
-
-  return { tools: wrapped, invalidMocks };
+  return { tools, invalidMocks };
 }
 
 /** Subset of the parsed mock map scoped to a single URI scheme. */
@@ -246,18 +243,46 @@ function scopeMocks(
 }
 
 /**
- * Canonical list of (scheme, adapter) pairs that buildDefaultTools provides.
- * Kept as an array so buildToolsFromMocks can inspect it; buildDefaultTools
- * remains the only exposed factory for backwards compatibility.
+ * Build the canonical set of (scheme → adapter) from defaults + active providers.
+ * Only the first HTTP and first MCP provider are used (v1 limitation).
  */
-function buildDefaultAdapters(): Map<string, ToolAdapter> {
+function buildAdapters(providers: ToolProvider[]): Map<string, ToolAdapter> {
   const adapters = new Map<string, ToolAdapter>();
-  // buildDefaultTools builds a single FnAdapter registered under "fn".
-  // Recreating that here means the wrapped registry shares semantics.
+
   const fn = new FnAdapter();
   seedDefaultFnHandlers(fn);
   adapters.set('fn', fn);
+
+  const active = providers.filter((p) => p.enabled && p.url.trim());
+
+  const httpProvider = active.find((p) => p.type === 'http');
+  if (httpProvider) {
+    const headers = parseHeaders(httpProvider.headers);
+    const httpAdapter = new HttpAdapter({ headers });
+    adapters.set('http', httpAdapter);
+    adapters.set('https', httpAdapter);
+  }
+
+  const mcpProvider = active.find((p) => p.type === 'mcp');
+  if (mcpProvider) {
+    const headers = parseHeaders(mcpProvider.headers);
+    adapters.set('mcp', new McpBrowserAdapter(mcpProvider.url, headers));
+  }
+
   return adapters;
+}
+
+function parseHeaders(raw?: string): Record<string, string> {
+  if (!raw?.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return {};
 }
 
 /**
@@ -269,7 +294,8 @@ function buildDefaultAdapters(): Map<string, ToolAdapter> {
 export function buildAgent(
   agentSource: string,
   settings: LlmSettings,
-  mocks: ToolMock[] = []
+  mocks: ToolMock[] = [],
+  providers: ToolProvider[] = []
 ): BuildAgentResult {
   if (!settings.baseUrl || !settings.apiKey || !settings.model) {
     throw new Error(
@@ -291,7 +317,7 @@ export function buildAgent(
     );
   }
 
-  const { tools, invalidMocks } = buildToolsFromMocks(mocks);
+  const { tools, invalidMocks } = buildToolRegistry(mocks, providers);
 
   const openai = createOpenAI({
     baseURL: settings.baseUrl,

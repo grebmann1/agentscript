@@ -82,7 +82,7 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     watch: {
       ignored: ['**/playwright-report/**'],
     },
@@ -91,14 +91,13 @@ export default defineConfig({
     },
     port: 27003,
     strictPort: true,
-    // Uncomment to enable API proxy when deploying with a backend server.
-    // proxy: {
-    //   '/api': {
-    //     target: 'http://localhost:8080',
-    //     changeOrigin: true,
-    //     ws: true,
-    //   },
-    // },
+    proxy: {
+      '/mcp-proxy': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/mcp-proxy/, ''),
+      },
+    },
   },
   plugins: [react(), tailwindcss()],
 });

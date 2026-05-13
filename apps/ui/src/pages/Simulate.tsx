@@ -31,9 +31,11 @@ import {
   type TimelineEntry,
 } from '~/components/simulator/EventTimeline';
 import { MocksPanel } from '~/components/simulator/MocksPanel';
+import { ProvidersPanel } from '~/components/simulator/ProvidersPanel';
 import { RightPane } from '~/components/simulator/RightPane';
 import { SnippetPanel } from '~/components/simulator/SnippetPanel';
 import { SettingsDialog } from '~/components/SettingsDialog';
+import { useToolProviderStore } from '~/store/toolProviderStore';
 import {
   Empty,
   EmptyContent,
@@ -64,6 +66,9 @@ export function Simulate() {
   const agentName = useAgentStore(state =>
     agentId ? state.agents[agentId]?.name : undefined
   );
+  const enabledProviderCount = useToolProviderStore(
+    (s) => s.providers.filter((p) => p.enabled).length
+  );
   const baseUrl = useLlmSettingsStore(state => state.baseUrl);
   const apiKey = useLlmSettingsStore(state => state.apiKey);
   const model = useLlmSettingsStore(state => state.model);
@@ -88,6 +93,7 @@ export function Simulate() {
     sourceHash: string;
     settingsHash: string;
     mocksHash: string;
+    providersHash: string;
   } | null>(null);
 
   const settingsHash = useMemo(
@@ -97,18 +103,23 @@ export function Simulate() {
   const mocksHash = useMemo(() => JSON.stringify(mocks), [mocks]);
 
   const getAgent = useCallback((): AgentScriptAgent => {
+    const providers = useToolProviderStore.getState().providers;
+    const providersHash = JSON.stringify(
+      providers.map((p) => ({ id: p.id, type: p.type, url: p.url, headers: p.headers, enabled: p.enabled }))
+    );
     const sourceHash = agentSource;
     const cached = agentRef.current;
     if (
       cached &&
       cached.sourceHash === sourceHash &&
       cached.settingsHash === settingsHash &&
-      cached.mocksHash === mocksHash
+      cached.mocksHash === mocksHash &&
+      cached.providersHash === providersHash
     ) {
       return cached.agent;
     }
-    const { agent } = buildAgent(agentSource, settings, mocks);
-    agentRef.current = { agent, sourceHash, settingsHash, mocksHash };
+    const { agent } = buildAgent(agentSource, settings, mocks, providers);
+    agentRef.current = { agent, sourceHash, settingsHash, mocksHash, providersHash };
     return agent;
   }, [agentSource, settings, settingsHash, mocks, mocksHash]);
 
@@ -310,6 +321,12 @@ export function Simulate() {
                 label: 'Mocks',
                 badge: mocks.filter(m => m.enabled).length,
                 content: <MocksPanel agentId={agentId} mocks={mocks} />,
+              },
+              {
+                id: 'providers',
+                label: 'Providers',
+                badge: enabledProviderCount || undefined,
+                content: <ProvidersPanel />,
               },
               {
                 id: 'snippet',
