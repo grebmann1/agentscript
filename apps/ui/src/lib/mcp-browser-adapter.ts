@@ -59,7 +59,7 @@ export class McpBrowserAdapter implements ToolAdapter {
     const content = result.content as
       | Array<{ type: string; text: string }>
       | undefined;
-    const textContent = content?.find((c) => c.type === 'text');
+    const textContent = content?.find(c => c.type === 'text');
     if (textContent) {
       try {
         return JSON.parse(textContent.text) as Record<string, unknown>;
@@ -77,8 +77,8 @@ export class McpBrowserAdapter implements ToolAdapter {
   }
 
   private ensureInitialized(signal?: AbortSignal): Promise<void> {
-    if (!this.initPromise) {
-      this.initPromise = this.doInitialize(signal).catch((err) => {
+    if (this.initPromise === null) {
+      this.initPromise = this.doInitialize(signal).catch(err => {
         this.initPromise = null;
         throw err;
       });
@@ -131,7 +131,10 @@ export class McpBrowserAdapter implements ToolAdapter {
       signal: effectiveSignal,
     });
     if (!res.ok) {
-      const body = await res.text().catch(() => '').then((t) => t.slice(0, 500));
+      const body = await res
+        .text()
+        .catch(() => '')
+        .then(t => t.slice(0, 500));
       throw new Error(`MCP server returned ${res.status}: ${body}`);
     }
     const json = (await res.json()) as McpRpcResponse;
@@ -139,7 +142,9 @@ export class McpBrowserAdapter implements ToolAdapter {
       throw new Error(`Invalid JSON-RPC response: missing jsonrpc "2.0" field`);
     }
     if (json.id !== requestId) {
-      throw new Error(`JSON-RPC id mismatch: expected ${requestId}, got ${json.id}`);
+      throw new Error(
+        `JSON-RPC id mismatch: expected ${requestId}, got ${json.id}`
+      );
     }
     if (json.error) {
       throw new Error(`MCP error ${json.error.code}: ${json.error.message}`);

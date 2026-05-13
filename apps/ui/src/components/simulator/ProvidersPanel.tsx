@@ -18,8 +18,8 @@ import {
 import { McpBrowserAdapter } from '~/lib/mcp-browser-adapter';
 
 export function ProvidersPanel() {
-  const providers = useToolProviderStore((s) => s.providers);
-  const addProvider = useToolProviderStore((s) => s.addProvider);
+  const providers = useToolProviderStore(s => s.providers);
+  const addProvider = useToolProviderStore(s => s.addProvider);
 
   return (
     <div className="flex h-full flex-col">
@@ -58,7 +58,7 @@ export function ProvidersPanel() {
           </div>
         ) : (
           <ul className="space-y-3">
-            {providers.map((provider) => (
+            {providers.map(provider => (
               <ProviderRow key={provider.id} provider={provider} />
             ))}
           </ul>
@@ -69,10 +69,10 @@ export function ProvidersPanel() {
 }
 
 function ProviderRow({ provider }: { provider: ToolProvider }) {
-  const updateProvider = useToolProviderStore((s) => s.updateProvider);
-  const removeProvider = useToolProviderStore((s) => s.removeProvider);
-  const toggleProvider = useToolProviderStore((s) => s.toggleProvider);
-  const setDiscoveredTools = useToolProviderStore((s) => s.setDiscoveredTools);
+  const updateProvider = useToolProviderStore(s => s.updateProvider);
+  const removeProvider = useToolProviderStore(s => s.removeProvider);
+  const toggleProvider = useToolProviderStore(s => s.toggleProvider);
+  const setDiscoveredTools = useToolProviderStore(s => s.setDiscoveredTools);
 
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState<string | null>(null);
@@ -92,7 +92,7 @@ function ProviderRow({ provider }: { provider: ToolProvider }) {
         const tools = await adapter.listTools(controller.signal);
         setDiscoveredTools(
           provider.id,
-          tools.map((t) => t.name)
+          tools.map(t => t.name)
         );
       } else {
         const headers = parseHeadersSafe(provider.headers);
@@ -133,9 +133,7 @@ function ProviderRow({ provider }: { provider: ToolProvider }) {
         </span>
         <Input
           value={provider.name}
-          onChange={(e) =>
-            updateProvider(provider.id, { name: e.target.value })
-          }
+          onChange={e => updateProvider(provider.id, { name: e.target.value })}
           placeholder="Provider name"
           className="h-7 text-xs"
         />
@@ -152,20 +150,16 @@ function ProviderRow({ provider }: { provider: ToolProvider }) {
       <div className="flex items-center gap-2">
         <Input
           value={provider.url}
-          onChange={(e) =>
-            updateProvider(provider.id, { url: e.target.value })
-          }
+          onChange={e => updateProvider(provider.id, { url: e.target.value })}
           placeholder={
-            provider.type === 'mcp'
-              ? '/mcp-proxy'
-              : 'http://localhost:3000'
+            provider.type === 'mcp' ? '/mcp-proxy' : 'http://localhost:3000'
           }
           className="font-mono text-xs"
         />
         <Button
           variant="outline"
           size="sm"
-          onClick={handleTest}
+          onClick={() => void handleTest()}
           disabled={testing || !provider.url.trim()}
         >
           <Zap className="h-3.5 w-3.5" />
@@ -179,7 +173,7 @@ function ProviderRow({ provider }: { provider: ToolProvider }) {
         </summary>
         <Input
           value={provider.headers ?? ''}
-          onChange={(e) =>
+          onChange={e =>
             updateProvider(provider.id, { headers: e.target.value })
           }
           placeholder='{"Authorization": "Bearer ..."}'
@@ -193,7 +187,7 @@ function ProviderRow({ provider }: { provider: ToolProvider }) {
 
       {provider.discoveredTools && provider.discoveredTools.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {provider.discoveredTools.map((tool) => (
+          {provider.discoveredTools.map(tool => (
             <span
               key={tool}
               className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"

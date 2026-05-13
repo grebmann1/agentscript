@@ -34,14 +34,14 @@ interface ToolProviderState {
 
 export const useToolProviderStore = create<ToolProviderState>()(
   persist(
-    (set) => ({
+    set => ({
       providers: [],
-      addProvider: (type) => {
+      addProvider: type => {
         const id =
           typeof crypto !== 'undefined' && 'randomUUID' in crypto
             ? crypto.randomUUID()
             : Math.random().toString(36).slice(2);
-        set((state) => ({
+        set(state => ({
           providers: [
             ...state.providers,
             {
@@ -55,24 +55,24 @@ export const useToolProviderStore = create<ToolProviderState>()(
         }));
       },
       updateProvider: (id, patch) =>
-        set((state) => ({
-          providers: state.providers.map((p) =>
+        set(state => ({
+          providers: state.providers.map(p =>
             p.id === id ? { ...p, ...patch } : p
           ),
         })),
-      removeProvider: (id) =>
-        set((state) => ({
-          providers: state.providers.filter((p) => p.id !== id),
+      removeProvider: id =>
+        set(state => ({
+          providers: state.providers.filter(p => p.id !== id),
         })),
-      toggleProvider: (id) =>
-        set((state) => ({
-          providers: state.providers.map((p) =>
+      toggleProvider: id =>
+        set(state => ({
+          providers: state.providers.map(p =>
             p.id === id ? { ...p, enabled: !p.enabled } : p
           ),
         })),
       setDiscoveredTools: (id, tools) =>
-        set((state) => ({
-          providers: state.providers.map((p) =>
+        set(state => ({
+          providers: state.providers.map(p =>
             p.id === id ? { ...p, discoveredTools: tools } : p
           ),
         })),
@@ -80,8 +80,10 @@ export const useToolProviderStore = create<ToolProviderState>()(
     {
       name: 'agentscript.tool-providers',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        providers: state.providers.map(({ discoveredTools, ...rest }) => rest),
+      partialize: state => ({
+        providers: state.providers.map(
+          ({ discoveredTools: _, ...rest }) => rest
+        ),
       }),
     }
   )
