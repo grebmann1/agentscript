@@ -63,16 +63,25 @@ Any action target whose scheme is not `__state_update_action__` is routed throug
 
 Deferred to follow-up PRs — see `chatbots/module-graph-runtime` (Salesforce-internal) for the parity target.
 
-- `action` / `router` / `external_agent` / `byon` node types (only `subagent` today)
+- `action` / `router` / `external_agent` / `byon` node types (only `subagent` today; `router` nodes are currently dropped silently — see `ROADMAP.md`)
 - `on_init` / `on_exit` lifecycle hooks
 - `pre_tool_calls` / `post_tool_calls` per-tool hooks
 - `end_turn_first` on handoff
 - `RequireConfirmation` pause/resume
 - Granular per-turn limits (`maxHandoffs`, `maxReasoningIterations`, `maxToolCallsPerNode`)
 - Subgraph tools (agent-as-tool nesting)
-- MCP adapter (`mcp://`)
-- `AbortSignal` cancellation
-- OpenTelemetry spans
+- MCP adapter (`mcp://`) — the UI Simulator can connect to MCP servers in-browser, but the runtime ships `fn://` and `http://` adapters only
+
+## What now ships in this runtime
+
+- `AbortSignal` cancellation (runtime-level and per-turn)
+- OpenTelemetry-shaped tracing with pluggable span exporters (`InMemorySpanExporter`, `ConsoleSpanExporter`, `MultiSpanExporter`)
+- Output guardrails with retry, exhaustion policies, and feedback templates
+- Structured output enforcement (`native` / `guardrail` / `auto` strategies)
+- Middleware pipeline with before/after hooks
+- Tool-call usage limits
+- Checkpoint / restore via `runtime.checkpoint()` and `Runtime.fromCheckpoint(...)`
+- Delegation-as-tool and parallel tool dispatch
 
 ## Testing
 

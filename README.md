@@ -260,17 +260,18 @@ Open a [GitHub issue](https://github.com/salesforce/agentscript/issues/new) for 
 
 ## Open Source Approach & Limitations
 
-We're open sourcing the Agent Script specification, toolchain, and developer tools — the parser, linter, compiler, LSP, editor integrations, and UI. These are genuinely open and we welcome contributions to all of them.
+We're open sourcing the Agent Script specification, toolchain, developer tools, and now the JavaScript runtime — the parser, linter, compiler, LSP, editor integrations, UI, and `@agentscript/runtime` plus the `@agentscript/runtime-vercel` adapter. These are genuinely open and we welcome contributions to all of them.
 
-What we're not open sourcing (yet) is the runtime. Agent Script compiles to a Salesforce-internal specification format that executes on Salesforce infrastructure. That means you can parse, lint, compile, and build tooling around Agent Script, but running agents requires Salesforce's runtime environment.
+The Salesforce-internal runtime that ships agents in production remains separate. The open JS runtime is a parallel implementation: it executes the same compiled IR using the Vercel AI SDK (or any compatible LLM driver), so you can build, test, and run agents end-to-end without depending on Salesforce infrastructure. Some node types intended for the Salesforce runtime (e.g., `action`, `router`, `external_agent`, `byon`) are not yet implemented in the open runtime — see `packages/runtime/README.md` for the current support matrix.
 
-As a result, we're not accepting changes to the language spec for now. The spec needs to stay in sync with the runtime, and until we have a path to open sourcing the runtime, unilateral spec changes would create a split we can't support.
+The language spec still has to stay in sync with the Salesforce-internal runtime, so we're not yet accepting unilateral spec changes. Spec evolution happens through Salesforce; everything else — including the open runtime — is contributable.
 
 What's genuinely open:
 - the parser, linter, LSP, and all developer tooling
+- the JS runtime (`@agentscript/runtime`) and Vercel AI SDK adapter (`@agentscript/runtime-vercel`)
 - bug fixes across any of the above
 - editor integrations (VS Code, Monaco)
-- the UI playground
+- the UI playground (with the in-browser Simulator + Providers panel)
 - documentation and the formal spec
 
 We want to be straightforward about this tradeoff. More will open up over time.
