@@ -744,11 +744,14 @@ export class Runtime {
     system: string,
     tools: ToolDef[],
     signal?: AbortSignal,
-    responseFormat?: LlmStepInput['responseFormat']
+    responseFormat?: LlmStepInput['responseFormat'],
+    extraMessages?: ReadonlyArray<Msg>
   ): Promise<{ text: string; toolCalls: ToolCall[] }> {
     const input: LlmStepInput = {
       system,
-      messages: [...this.history],
+      messages: extraMessages
+        ? [...this.history, ...extraMessages]
+        : [...this.history],
       tools,
       signal,
     };
@@ -811,11 +814,17 @@ export class Runtime {
     const DEFAULT_FEEDBACK =
       'Your response failed validation: {error}. Please try again.';
 
+    // Retry context lives in a scratch buffer instead of this.history. If
+    // the outer turn throws (or guardrails exhaust under throw policy), the
+    // canonical history is untouched — rejected attempts don't persist.
+    const retryMessages: Msg[] = [];
+
     let lastResult = await this.runLlmStep(
       system,
       tools,
       signal,
-      responseFormat
+      responseFormat,
+      retryMessages
     );
 
     for (const guardrail of guardrails) {
@@ -849,7 +858,7 @@ export class Runtime {
             state: this.state.snapshot(),
             attempt,
             maxRetries,
-            messages: [...this.history],
+            messages: [...this.history, ...retryMessages],
           }
         );
 
@@ -889,25 +898,26 @@ export class Runtime {
           break;
         }
 
-        // Push the failed response + feedback into history for retry
+        // Stage the failed response + feedback in the scratch buffer so the
+        // next LLM call sees them, but never write them to this.history.
         const template = guardrail.feedbackTemplate ?? DEFAULT_FEEDBACK;
         const feedback = template.replace('{error}', lastError);
 
-        // Push the failed assistant message so the LLM sees what it said wrong
         if (lastResult.text) {
-          this.history.push({
+          retryMessages.push({
             role: 'assistant',
             content: lastResult.text,
           });
         }
-        this.history.push({ role: 'user', content: feedback });
+        retryMessages.push({ role: 'user', content: feedback });
 
-        // Retry the LLM step
+        // Retry the LLM step with scratch buffer appended
         lastResult = await this.runLlmStep(
           system,
           tools,
           signal,
-          responseFormat
+          responseFormat,
+          retryMessages
         );
       }
     }
@@ -1729,9 +1739,11 @@ export class Runtime {
         }
       }
 
-      // End parent tracing span
+      // End parent tracing span. Use endSpanById because children may have
+      // been started off-stack (parallel) — the parent is no longer guaranteed
+      // to be at the top of the stack.
       if (this._tracingCtx && parentSpanId) {
-        this._tracingCtx.endSpan('ok');
+        this._tracingCtx.endSpanById(parentSpanId, 'ok');
       }
 
       this.bus.emit({
@@ -1769,11 +1781,18 @@ export class Runtime {
     stateWrites: Array<[string, unknown]>;
     error: boolean;
   }> {
-    // Start a child span for this tool call
+    // Start an off-stack child span for this tool call. Off-stack so that
+    // concurrent siblings (this method runs under Promise.allSettled in
+    // dispatchToolCallsParallel) don't interleave LIFO pops. Track the spanId
+    // so we close the right one in makeResult.
+    let childSpanId: string | undefined;
     if (this._tracingCtx && parentSpanId) {
-      this._tracingCtx.startChildSpan(parentSpanId, `tool-call:${call.name}`, {
-        'tool.name': call.name,
-      });
+      const childSpan = this._tracingCtx.startChildSpan(
+        parentSpanId,
+        `tool-call:${call.name}`,
+        { 'tool.name': call.name }
+      );
+      childSpanId = childSpan.spanId;
     }
 
     const makeResult = (
@@ -1782,8 +1801,8 @@ export class Runtime {
       stateWrites: Array<[string, unknown]> = [],
       isError = false
     ) => {
-      if (this._tracingCtx && parentSpanId) {
-        this._tracingCtx.endSpan(isError ? 'error' : 'ok');
+      if (this._tracingCtx && childSpanId) {
+        this._tracingCtx.endSpanById(childSpanId, isError ? 'error' : 'ok');
       }
       return {
         call,

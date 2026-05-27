@@ -139,6 +139,98 @@ describe('Guardrail Integration', () => {
     });
   });
 
+  describe('Retry feedback isolation', () => {
+    // Regression: retries previously pushed rejected attempts + synthetic
+    // user feedback into this.history, leaking failed attempts into the
+    // canonical conversation. They must stay in a scratch buffer.
+    it('does not leak rejected attempts or feedback into canonical history on success', async () => {
+      const output = compileMinimal();
+      const llm = new ScriptedLlm([
+        { text: 'first attempt is bad' },
+        { text: '{"name": "Alice"}' },
+      ]);
+
+      const guardrail = jsonSchemaGuardrail({
+        schema: {
+          type: 'object',
+          required: ['name'],
+          properties: { name: { type: 'string' } },
+        },
+        maxRetries: 2,
+      });
+
+      const runtime = new Runtime({
+        doc: output,
+        llm,
+        tools: new ToolRegistry(),
+        guardrails: [guardrail],
+      });
+
+      await runtime.turn('Give me a person');
+
+      const checkpoint = runtime.checkpoint();
+      const assistantMessages = checkpoint.history.filter(
+        m => m.role === 'assistant'
+      );
+      const userMessages = checkpoint.history.filter(m => m.role === 'user');
+
+      // Only one assistant message in canonical history — the passing one.
+      expect(assistantMessages).toHaveLength(1);
+      expect(
+        assistantMessages.every(
+          m =>
+            'content' in m &&
+            typeof m.content === 'string' &&
+            !m.content.includes('first attempt is bad')
+        )
+      ).toBe(true);
+      // Only the original user prompt — no synthetic feedback messages.
+      expect(userMessages).toHaveLength(1);
+      expect(
+        userMessages.every(
+          m =>
+            'content' in m &&
+            typeof m.content === 'string' &&
+            !m.content.includes('failed validation')
+        )
+      ).toBe(true);
+    });
+
+    it('does not leak rejected attempts on guardrail exhaustion (throw policy)', async () => {
+      const output = compileMinimal();
+      const llm = new ScriptedLlm([
+        { text: 'bad1' },
+        { text: 'bad2' },
+        { text: 'bad3' },
+      ]);
+      const guardrail = jsonSchemaGuardrail({
+        schema: { type: 'object', required: ['name'], properties: {} },
+        maxRetries: 2,
+      });
+      const runtime = new Runtime({
+        doc: output,
+        llm,
+        tools: new ToolRegistry(),
+        guardrails: [guardrail],
+        exhaustionPolicy: 'throw',
+      });
+
+      await expect(runtime.turn('go')).rejects.toThrow(
+        GuardrailExhaustionError
+      );
+
+      const checkpoint = runtime.checkpoint();
+      const assistantMessages = checkpoint.history.filter(
+        m => m.role === 'assistant'
+      );
+      // No assistant messages — every attempt was rejected.
+      expect(assistantMessages).toHaveLength(0);
+      // Only the user prompt — no synthetic feedback persisted.
+      const userMessages = checkpoint.history.filter(m => m.role === 'user');
+      expect(userMessages).toHaveLength(1);
+    });
+  });
+
   describe('Guardrail exhaustion with throw policy', () => {
     it('throws GuardrailExhaustionError when retries exceeded', async () => {
       const output = compileMinimal();

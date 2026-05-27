@@ -12,6 +12,22 @@ import type {
 } from './types.js';
 import { validateSchema } from './schema-validator.js';
 
+/**
+ * Test a string against a pattern without mutating caller-supplied state.
+ * RegExp objects with `g` or `y` flags advance `lastIndex` on `.test()`,
+ * so using the caller's pattern directly across calls leaks state. Strings
+ * are wrapped in a fresh case-insensitive RegExp.
+ */
+function patternTest(pattern: string | RegExp, input: string): boolean {
+  if (typeof pattern === 'string') {
+    return new RegExp(pattern, 'i').test(input);
+  }
+  if (pattern.global || pattern.sticky) {
+    return new RegExp(pattern.source, pattern.flags).test(input);
+  }
+  return pattern.test(input);
+}
+
 // ---------------------------------------------------------------------------
 // jsonSchemaGuardrail
 // ---------------------------------------------------------------------------
@@ -64,8 +80,7 @@ export function regexGuardrail(opts: {
     maxRetries: opts.maxRetries ?? 1,
     feedbackTemplate: opts.feedbackTemplate,
     validate(output) {
-      opts.pattern.lastIndex = 0;
-      const matches = opts.pattern.test(output.text);
+      const matches = patternTest(opts.pattern, output.text);
       const valid = opts.invert ? !matches : matches;
       return {
         valid,
@@ -97,24 +112,22 @@ export function contentPolicyGuardrail(opts: {
     feedbackTemplate: opts.feedbackTemplate,
     validate(output) {
       for (const blocked of opts.blocklist ?? []) {
-        const pattern =
-          typeof blocked === 'string' ? new RegExp(blocked, 'i') : blocked;
-        pattern.lastIndex = 0;
-        if (pattern.test(output.text)) {
+        if (patternTest(blocked, output.text)) {
+          const source =
+            typeof blocked === 'string' ? blocked : blocked.source;
           return {
             valid: false,
-            reason: `Blocked content detected: ${pattern.source}`,
+            reason: `Blocked content detected: ${source}`,
           };
         }
       }
       for (const required of opts.requirelist ?? []) {
-        const pattern =
-          typeof required === 'string' ? new RegExp(required, 'i') : required;
-        pattern.lastIndex = 0;
-        if (!pattern.test(output.text)) {
+        if (!patternTest(required, output.text)) {
+          const source =
+            typeof required === 'string' ? required : required.source;
           return {
             valid: false,
-            reason: `Required content missing: ${pattern.source}`,
+            reason: `Required content missing: ${source}`,
           };
         }
       }
@@ -230,10 +243,15 @@ export function composeGuardrails(
       output: GuardrailInput,
       context: GuardrailContext
     ): Promise<GuardrailResult> {
+      const hasText = output.text.length > 0;
+      const hasToolCalls = output.toolCalls.length > 0;
       for (const g of guardrails) {
         const target = g.target ?? 'both';
-        if (target === 'text' && output.toolCalls.length > 0) continue;
-        if (target === 'tool-calls' && output.toolCalls.length === 0) continue;
+        // Mirror runLlmStepWithGuardrails' target filter so 'both' children
+        // always run, and single-target children only skip when the output
+        // genuinely doesn't include their target.
+        if (target === 'text' && !hasText && hasToolCalls) continue;
+        if (target === 'tool-calls' && !hasToolCalls && hasText) continue;
         const result = await g.validate(output, context);
         if (!result.valid) return result;
       }

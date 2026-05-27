@@ -7,14 +7,19 @@ import type { Span, SpanExporter, SpanStatus } from './types.js';
 import { generateTraceId, generateSpanId } from './ids.js';
 
 /**
- * Stack-based tracing context that manages a tree of spans for a single trace.
- * Spans are started/ended in LIFO order (the most recently started span is
- * always the "current" one). Completed spans are buffered internally until
- * `flush()` or `drainAll()` is called.
+ * Tracing context that manages a tree of spans for a single trace.
+ *
+ * The sequential reasoning loop nests spans LIFO via `startSpan`/`endSpan` and
+ * a stack tracks the "current" span. Parallel dispatch runs N concurrent
+ * children that share one parent — those use `startChildSpan` (off-stack) and
+ * close via `endSpanById`, so concurrent siblings never cross-pop each other.
+ *
+ * Completed spans buffer internally until `flush()` or `drainAll()`.
  */
 export class TracingContext {
   private readonly traceId: string;
   private readonly stack: Span[] = [];
+  private readonly active: Map<string, Span> = new Map();
   private readonly completed: Span[] = [];
   private readonly exporter: SpanExporter | undefined;
 
@@ -33,8 +38,8 @@ export class TracingContext {
   }
 
   /**
-   * Start a new child span. If there's a current span on the stack, it becomes
-   * the parent. Returns the newly created span.
+   * Start a new sequential child span. The current top-of-stack span becomes
+   * the parent. The new span goes on the stack and is closed by `endSpan()`.
    */
   startSpan(name: string, attributes?: Record<string, unknown>): Span {
     const parent = this.current();
@@ -49,6 +54,7 @@ export class TracingContext {
       events: [],
     };
     this.stack.push(span);
+    this.active.set(span.spanId, span);
     return span;
   }
 
@@ -59,21 +65,40 @@ export class TracingContext {
   endSpan(status?: SpanStatus): Span | undefined {
     const span = this.stack.pop();
     if (!span) return undefined;
-    span.endTime = Date.now();
-    span.status = status ?? 'ok';
-    this.completed.push(span);
+    this.finalize(span, status);
     return span;
   }
 
   /**
-   * End all remaining spans on the stack with the given status (used on
-   * abort/error to close unclosed spans).
+   * End a specific span by id — required for off-stack spans started via
+   * `startChildSpan`, and for closing the parent of a parallel batch from a
+   * known spanId rather than relying on stack position.
+   */
+  endSpanById(spanId: string, status?: SpanStatus): Span | undefined {
+    const span = this.active.get(spanId);
+    if (!span) return undefined;
+    const idx = this.stack.lastIndexOf(span);
+    if (idx >= 0) this.stack.splice(idx, 1);
+    this.finalize(span, status);
+    return span;
+  }
+
+  private finalize(span: Span, status?: SpanStatus): void {
+    span.endTime = Date.now();
+    span.status = status ?? 'ok';
+    this.active.delete(span.spanId);
+    this.completed.push(span);
+  }
+
+  /**
+   * End every still-active span with the given status (used on abort/error).
+   * Drains both stacked and off-stack spans.
    */
   drainAll(status: SpanStatus = 'error'): Span[] {
     const drained: Span[] = [];
-    while (this.stack.length > 0) {
-      const span = this.endSpan(status);
-      if (span) drained.push(span);
+    for (const span of Array.from(this.active.values())) {
+      this.endSpanById(span.spanId, status);
+      drained.push(span);
     }
     return drained;
   }
@@ -89,9 +114,8 @@ export class TracingContext {
   }
 
   /**
-   * Start a child span with an explicit parent (bypasses the stack).
-   * Used for parallel operations where multiple spans share a parent
-   * but don't nest sequentially.
+   * Start an off-stack child of an explicit parent. Use for siblings that may
+   * run concurrently (parallel tool dispatch). Close with `endSpanById`.
    */
   startChildSpan(
     parentSpanId: string,
@@ -108,7 +132,7 @@ export class TracingContext {
       attributes: attributes ?? {},
       events: [],
     };
-    this.stack.push(span);
+    this.active.set(span.spanId, span);
     return span;
   }
 
@@ -119,6 +143,6 @@ export class TracingContext {
 
   /** True if all spans have been ended. */
   isEmpty(): boolean {
-    return this.stack.length === 0;
+    return this.active.size === 0;
   }
 }

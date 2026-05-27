@@ -9,6 +9,7 @@ import {
   Runtime,
   ToolRegistry,
   FnAdapter,
+  InMemorySpanExporter,
   type RuntimeEvent,
   type ParallelDispatchOptions,
 } from '../src/index.js';
@@ -445,6 +446,62 @@ describe('Runtime — parallel tool dispatch', () => {
     expect(hooks).toContain('before:tool1');
     expect(hooks).toContain('after:tool0');
     expect(hooks).toContain('after:tool1');
+  });
+
+  it('produces correct parent/child span tree under concurrent dispatch', async () => {
+    // Regression: tracing previously used a single LIFO stack, so concurrent
+    // siblings cross-popped each other and parent/child relationships
+    // depended on completion order. Children stagger their resolution to
+    // force interleaving — order should not matter.
+    const fn = new FnAdapter();
+    const delays: Record<string, number> = { tool0: 30, tool1: 5, tool2: 20 };
+    for (const name of Object.keys(delays)) {
+      fn.register(name, async () => {
+        await new Promise(r => setTimeout(r, delays[name]));
+        return { name };
+      });
+    }
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [
+          { id: 'c0', name: 'tool0', arguments: {} },
+          { id: 'c1', name: 'tool1', arguments: {} },
+          { id: 'c2', name: 'tool2', arguments: {} },
+        ],
+      },
+      { text: 'Done' },
+    ]);
+    const exporter = new InMemorySpanExporter();
+    const runtime = new Runtime({
+      doc: makeDoc(),
+      llm,
+      tools,
+      parallel: { strategy: 'always' },
+      tracing: { enabled: true, exporter },
+    });
+
+    await runtime.turn('go');
+
+    const spans = exporter.getSpans();
+    const parent = spans.find(s => s.name === 'parallel-tool-dispatch');
+    const children = spans.filter(s => s.name.startsWith('tool-call:'));
+
+    expect(parent).toBeDefined();
+    expect(children).toHaveLength(3);
+    expect(parent!.parentSpanId).toBeDefined();
+    for (const child of children) {
+      expect(child.parentSpanId).toBe(parent!.spanId);
+      expect(child.status).toBe('ok');
+      expect(child.endTime).toBeGreaterThanOrEqual(child.startTime);
+    }
+    expect(parent!.status).toBe('ok');
+    // Parent must outlive every child even when children resolve out of order.
+    for (const child of children) {
+      expect(parent!.endTime!).toBeGreaterThanOrEqual(child.endTime!);
+    }
   });
 
   it('single tool call does not trigger parallel dispatch', async () => {

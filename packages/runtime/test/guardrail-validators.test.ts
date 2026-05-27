@@ -427,20 +427,29 @@ describe('composeGuardrails', () => {
     );
   });
 
-  it('skips text-only guardrails when tool calls present', async () => {
+  it('skips text-only guardrails only when output has no text', async () => {
+    // Mirrors runLlmStepWithGuardrails: text-only guardrails run whenever
+    // there's text to validate — having tool calls alongside doesn't excuse
+    // the text from validation.
     const textOnly = jsonSchemaGuardrail({ schema: { type: 'object' } });
-    const both = customGuardrail('always', () => ({ valid: true }));
+    const g = composeGuardrails([textOnly]);
 
-    const g = composeGuardrails([textOnly, both]);
+    // No text + tool calls → text-only guardrail skipped.
+    const skipped = await g.validate(
+      { text: '', toolCalls: [{ id: '1', name: 't', arguments: {} }] },
+      makeCtx()
+    );
+    expect(skipped).toEqual({ valid: true });
 
-    // Input has tool calls, so text-only guardrail should be skipped
-    const input: GuardrailInput = {
-      text: 'not valid json',
-      toolCalls: [{ id: '1', name: 'test', arguments: {} }],
-    };
-
-    const result = await g.validate(input, makeCtx());
-    expect(result).toEqual({ valid: true });
+    // Text present (even alongside tool calls) → guardrail must run.
+    const ranWithBoth = await g.validate(
+      {
+        text: 'not valid json',
+        toolCalls: [{ id: '1', name: 't', arguments: {} }],
+      },
+      makeCtx()
+    );
+    expect(ranWithBoth.valid).toBe(false);
   });
 
   it('skips tool-calls-only guardrails when no tool calls', async () => {
