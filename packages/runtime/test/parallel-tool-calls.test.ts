@@ -11,7 +11,6 @@ import {
   FnAdapter,
   InMemorySpanExporter,
   type RuntimeEvent,
-  type ParallelDispatchOptions,
 } from '../src/index.js';
 import { ScriptedLlm } from './helpers.js';
 
@@ -88,7 +87,7 @@ function makeToolRegistry(delay = 0): ToolRegistry {
   const fn = new FnAdapter();
   for (let i = 0; i < 5; i++) {
     const name = `tool${i}`;
-    fn.register(name, async (args) => {
+    fn.register(name, async args => {
       if (delay > 0) await new Promise(r => setTimeout(r, delay));
       return { ok: true, name, ...args };
     });
@@ -160,9 +159,18 @@ describe('Runtime — parallel tool dispatch', () => {
     const messages = llm.calls[1].messages;
     const toolMsgs = messages.filter(m => m.role === 'tool');
     expect(toolMsgs).toHaveLength(3);
-    expect(JSON.parse(toolMsgs[0].content as string)).toMatchObject({ name: 'tool0', order: 'first' });
-    expect(JSON.parse(toolMsgs[1].content as string)).toMatchObject({ name: 'tool1', order: 'second' });
-    expect(JSON.parse(toolMsgs[2].content as string)).toMatchObject({ name: 'tool2', order: 'third' });
+    expect(JSON.parse(toolMsgs[0].content as string)).toMatchObject({
+      name: 'tool0',
+      order: 'first',
+    });
+    expect(JSON.parse(toolMsgs[1].content as string)).toMatchObject({
+      name: 'tool1',
+      order: 'second',
+    });
+    expect(JSON.parse(toolMsgs[2].content as string)).toMatchObject({
+      name: 'tool2',
+      order: 'third',
+    });
   });
 
   it('actually runs in parallel (timing check)', async () => {
@@ -428,11 +436,11 @@ describe('Runtime — parallel tool dispatch', () => {
         {
           name: 'test-hooks',
           priority: 1,
-          beforeToolCall: async (ctx) => {
+          beforeToolCall: async ctx => {
             hooks.push(`before:${ctx.toolName}`);
             return undefined;
           },
-          afterToolCall: async (ctx) => {
+          afterToolCall: async ctx => {
             hooks.push(`after:${ctx.toolName}`);
             return undefined;
           },
