@@ -7,6 +7,7 @@ import {
   AbortError,
   InMemorySpanExporter,
   MultiSpanExporter,
+  TracingContext,
 } from '../src/index.js';
 import type { RuntimeEvent } from '../src/index.js';
 import { ScriptedLlm } from './helpers.js';
@@ -441,5 +442,38 @@ describe('Tracing integration', () => {
 
     const traceId = spans[0].traceId;
     expect(traceId).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  // -------------------------------------------------------------------------
+  // 13. drainAll closes off-stack parallel children with error status
+  // -------------------------------------------------------------------------
+  it('drainAll finalizes off-stack child spans on abort', async () => {
+    // Regression: parallel dispatch starts child spans off-stack via
+    // startChildSpan (no stack push). On abort, drainAll must walk the active
+    // map — not just the stack — and close every started-but-unfinished span.
+    const ctx = new TracingContext();
+    const parent = ctx.startSpan('parallel-tool-dispatch');
+    const childA = ctx.startChildSpan(parent.spanId, 'tool-call:slowA');
+    const childB = ctx.startChildSpan(parent.spanId, 'tool-call:slowB');
+    expect(ctx.isEmpty()).toBe(false);
+
+    const drained = ctx.drainAll('error');
+
+    expect(drained).toHaveLength(3);
+    expect(ctx.isEmpty()).toBe(true);
+    const completed = ctx.getCompleted();
+    const childAFinal = completed.find(s => s.spanId === childA.spanId);
+    const childBFinal = completed.find(s => s.spanId === childB.spanId);
+    const parentFinal = completed.find(s => s.spanId === parent.spanId);
+    expect(childAFinal?.status).toBe('error');
+    expect(childAFinal?.endTime).toBeDefined();
+    expect(childBFinal?.status).toBe('error');
+    expect(childBFinal?.endTime).toBeDefined();
+    expect(parentFinal?.status).toBe('error');
+    expect(parentFinal?.endTime).toBeDefined();
+
+    // No double-finalize: each span appears exactly once in completed.
+    const ids = completed.map(s => s.spanId);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

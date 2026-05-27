@@ -249,6 +249,25 @@ describe('regexGuardrail', () => {
     const r2 = g.validate(makeInput('test'), makeCtx());
     expect(r2.valid).toBe(true);
   });
+
+  it('does not mutate caller-supplied global regex lastIndex', () => {
+    // Stronger invariant than "second call still matches": the caller's RegExp
+    // instance must be left untouched, since they may share it across other
+    // code paths that depend on its lastIndex.
+    const pattern = /test/g;
+    pattern.lastIndex = 7;
+    const g = regexGuardrail({ pattern });
+    g.validate(makeInput('test test test'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+  });
+
+  it('does not mutate caller-supplied sticky regex lastIndex', () => {
+    const pattern = /target/y;
+    pattern.lastIndex = 3;
+    const g = regexGuardrail({ pattern });
+    g.validate(makeInput('xyztarget'), makeCtx());
+    expect(pattern.lastIndex).toBe(3);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -318,6 +337,14 @@ describe('contentPolicyGuardrail', () => {
     // passes
     const ok = g.validate(makeInput('This is approved'), makeCtx());
     expect(ok).toEqual({ valid: true });
+  });
+
+  it('does not mutate caller-supplied blocklist regex lastIndex', () => {
+    const pattern = /secret/g;
+    pattern.lastIndex = 5;
+    const g = contentPolicyGuardrail({ blocklist: [pattern] });
+    g.validate(makeInput('xxxxxsecret'), makeCtx());
+    expect(pattern.lastIndex).toBe(5);
   });
 
   it('resets lastIndex for global regex patterns in blocklist', () => {

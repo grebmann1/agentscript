@@ -512,6 +512,57 @@ describe('Runtime — parallel tool dispatch', () => {
     }
   });
 
+  it('failed parallel tool call closes its span exactly once with error status', async () => {
+    // Regression: when a parallel tool call rejects, its child span must still
+    // be finalized via endSpanById in dispatchToolCallIsolated's catch path —
+    // not left dangling for drainAll to second-close. The exporter must see
+    // each child span exactly once with the right status.
+    const fn = new FnAdapter();
+    fn.register('tool0', async () => ({ ok: true }));
+    fn.register('tool1', () => Promise.reject(new Error('boom')));
+    fn.register('tool2', async () => ({ ok: true }));
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [
+          { id: 'c0', name: 'tool0', arguments: {} },
+          { id: 'c1', name: 'tool1', arguments: {} },
+          { id: 'c2', name: 'tool2', arguments: {} },
+        ],
+      },
+      { text: 'Recovered' },
+    ]);
+    const exporter = new InMemorySpanExporter();
+    const runtime = new Runtime({
+      doc: makeDoc(),
+      llm,
+      tools,
+      parallel: { strategy: 'always' },
+      tracing: { enabled: true, exporter },
+    });
+
+    await runtime.turn('go');
+
+    const spans = exporter.getSpans();
+    const childSpans = spans.filter(s => s.name.startsWith('tool-call:'));
+    expect(childSpans).toHaveLength(3);
+
+    const failed = childSpans.find(s => s.name === 'tool-call:tool1');
+    expect(failed).toBeDefined();
+    expect(failed!.status).toBe('error');
+    expect(failed!.endTime).toBeDefined();
+
+    for (const s of childSpans.filter(c => c.name !== 'tool-call:tool1')) {
+      expect(s.status).toBe('ok');
+      expect(s.endTime).toBeDefined();
+    }
+
+    const ids = childSpans.map(s => s.spanId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('single tool call does not trigger parallel dispatch', async () => {
     const events: RuntimeEvent[] = [];
     const llm = new ScriptedLlm([
