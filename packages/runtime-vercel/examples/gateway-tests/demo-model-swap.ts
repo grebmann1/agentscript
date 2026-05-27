@@ -187,7 +187,7 @@ async function main(): Promise<void> {
   console.log(`Gateway: ${cfg.baseURL}`);
   console.log(`Model:   ${cfg.model}\n`);
 
-  const { tools, callLog } = mockTool({
+  const { tools } = mockTool({
     SearchProducts: {
       delayMs: 30,
       result: {
@@ -252,9 +252,7 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------------
   const toolOrder = events
     .filter(e => e.kind === 'tool-call')
-    .map(e =>
-      (e as { name: string }).name.replace(/^fn:\/\//, '')
-    );
+    .map(e => (e as { name: string }).name.replace(/^fn:\/\//, ''));
 
   const handoffs = events
     .filter(e => e.kind === 'node-enter')
@@ -308,9 +306,9 @@ async function main(): Promise<void> {
   assertions.lt(
     llmTextEvents / turns.length,
     4,
-    `< 4 llm-text events per turn (avg ${(
-      llmTextEvents / turns.length
-    ).toFixed(1)})`
+    `< 4 llm-text events per turn (avg ${(llmTextEvents / turns.length).toFixed(
+      1
+    )})`
   );
 
   const errs = events.filter(
