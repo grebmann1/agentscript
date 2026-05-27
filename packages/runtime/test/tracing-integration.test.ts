@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { compileSource } from '@agentscript/agentforce';
+import type { AgentDSLAuthoring } from '@agentscript/compiler';
 import {
   Runtime,
   ToolRegistry,
@@ -442,6 +443,116 @@ describe('Tracing integration', () => {
 
     const traceId = spans[0].traceId;
     expect(traceId).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  // -------------------------------------------------------------------------
+  // T1.1 — Parallel + slow tool: parent span closes after slowest child
+  // -------------------------------------------------------------------------
+  it('parent parallel-tool-dispatch span closes after the slowest child', async () => {
+    // Regression: with a fast and a slow sibling, the parent's endTime must
+    // be >= the slowest child's endTime, both children must be parented to
+    // the parallel-dispatch span, and every started span must be finalized
+    // (no leak in TracingContext.active) by the end of the turn.
+    const fn = new FnAdapter();
+    fn.register('fastTool', () => ({ name: 'fastTool' }));
+    fn.register('slowTool', async () => {
+      await new Promise(r => setTimeout(r, 50));
+      return { name: 'slowTool' };
+    });
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [
+          { id: 'c0', name: 'fastTool', arguments: {} },
+          { id: 'c1', name: 'slowTool', arguments: {} },
+        ],
+      },
+      { text: 'Done' },
+    ]);
+
+    // Use the parallel-tool-calls fixture's makeDoc-equivalent inline:
+    // a doc with fastTool/slowTool wired through fn://.
+    const doc = {
+      agent_version: {
+        agent_name: 'test',
+        initial_node: 'main',
+        state_variables: [],
+        nodes: [
+          {
+            developer_name: 'main',
+            type: 'subagent',
+            instructions: 'You are a test agent.',
+            tools: [
+              { name: 'fastTool', target: 'fastTool', description: 'fast' },
+              { name: 'slowTool', target: 'slowTool', description: 'slow' },
+            ],
+            action_definitions: [
+              {
+                developer_name: 'fastTool',
+                invocation_target_type: 'fn',
+                invocation_target_name: 'fastTool',
+              },
+              {
+                developer_name: 'slowTool',
+                invocation_target_type: 'fn',
+                invocation_target_name: 'slowTool',
+              },
+            ],
+            before_reasoning: [],
+            before_reasoning_iteration: [],
+            after_all_tool_calls: [],
+            after_reasoning: [],
+          },
+        ],
+      },
+    } as unknown as AgentDSLAuthoring;
+
+    const exporter = new InMemorySpanExporter();
+    const events: RuntimeEvent[] = [];
+    const runtime = new Runtime({
+      doc,
+      llm,
+      tools,
+      parallel: { strategy: 'always' },
+      tracing: { enabled: true, exporter },
+    });
+    runtime.on(e => events.push(e));
+
+    await runtime.turn('go');
+
+    const spans = exporter.getSpans();
+    const parent = spans.find(s => s.name === 'parallel-tool-dispatch');
+    const children = spans.filter(s => s.name.startsWith('tool-call:'));
+
+    // Exactly 3 spans relating to the parallel batch: 1 parent + 2 children.
+    expect(parent).toBeDefined();
+    expect(children).toHaveLength(2);
+
+    // Both children parented to the dispatch span.
+    for (const child of children) {
+      expect(child.parentSpanId).toBe(parent!.spanId);
+      expect(child.status).toBe('ok');
+      expect(child.endTime).toBeDefined();
+    }
+
+    // Parent must outlive the slowest child.
+    const maxChildEnd = Math.max(...children.map(c => c.endTime!));
+    expect(parent!.status).toBe('ok');
+    expect(parent!.endTime!).toBeGreaterThanOrEqual(maxChildEnd);
+
+    // TracingContext.isEmpty() proxy: every span-start has a matching
+    // span-end with the same spanId, so nothing leaked in `active`.
+    const startIds = events
+      .filter(e => e.kind === 'span-start')
+      .map(e => (e as { spanId: string }).spanId);
+    const endIds = events
+      .filter(e => e.kind === 'span-end')
+      .map(e => (e as { spanId: string }).spanId);
+    expect(startIds.length).toBeGreaterThan(0);
+    expect(endIds.length).toBe(startIds.length);
+    expect(new Set(endIds)).toEqual(new Set(startIds));
   });
 
   // -------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { compileSource } from '@agentscript/agentforce';
-import { Runtime, ToolRegistry, FnAdapter, AbortError } from '../src/index.js';
+import {
+  Runtime,
+  ToolRegistry,
+  FnAdapter,
+  AbortError,
+  InMemorySpanExporter,
+} from '../src/index.js';
 import type {
   LlmDriver,
   LlmStepInput,
@@ -169,6 +175,109 @@ describe('Runtime — abort signal', () => {
 
     await expect(runtime.turn('hello')).rejects.toThrow(AbortError);
     expect(llm.calls).toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Tier 2 — T2.2: abort fired between LLM finish and tool dispatch via
+  // afterLlmStep middleware. Pipeline runs after LLM finishes but before
+  // the tool dispatch loop hits its `throwIfAborted` checkpoint.
+  // -----------------------------------------------------------------------
+  it('aborting from afterLlmStep middleware blocks tool dispatch', async () => {
+    const { output } = compileSource(HELLO);
+    const controller = new AbortController();
+
+    let toolInvoked = false;
+    const fn = new FnAdapter();
+    fn.register('greet', () => {
+      toolInvoked = true;
+      return { greeting: 'hi' };
+    });
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const middleware = {
+      name: 'abort-after-llm',
+      afterLlmStep() {
+        controller.abort('mid-turn cancel');
+        return undefined;
+      },
+    };
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [{ id: 'c1', name: 'greet', arguments: { name: 'Alice' } }],
+      },
+    ]);
+
+    const runtime = new Runtime({
+      doc: output,
+      llm,
+      tools,
+      middleware: [middleware],
+    });
+    const events: RuntimeEvent[] = [];
+    runtime.on(e => events.push(e));
+
+    await expect(
+      runtime.turn('hello', { signal: controller.signal })
+    ).rejects.toThrow(AbortError);
+
+    // Tool was never invoked
+    expect(toolInvoked).toBe(false);
+    // No tool-call events fired before the abort
+    expect(events.filter(e => e.kind === 'tool-call')).toHaveLength(0);
+    // Exactly one abort event
+    const aborts = events.filter(e => e.kind === 'abort');
+    expect(aborts).toHaveLength(1);
+
+    // The runtime should have drained any open tracing spans on abort. We
+    // can't access tracingCtx directly, but turning on tracing and checking
+    // the exporter saw all spans closed proves no leaks. Skipping span
+    // assertions here because tracing is disabled in this minimal test.
+  });
+
+  it('aborting from afterLlmStep with tracing on leaves no open spans', async () => {
+    const { output } = compileSource(HELLO);
+    const controller = new AbortController();
+
+    const fn = new FnAdapter();
+    fn.register('greet', () => ({ greeting: 'hi' }));
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const middleware = {
+      name: 'abort-after-llm',
+      afterLlmStep() {
+        controller.abort('mid-turn cancel');
+        return undefined;
+      },
+    };
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [{ id: 'c1', name: 'greet', arguments: { name: 'Alice' } }],
+      },
+    ]);
+
+    const exporter = new InMemorySpanExporter();
+    const runtime = new Runtime({
+      doc: output,
+      llm,
+      tools,
+      middleware: [middleware],
+      tracing: { enabled: true, exporter },
+    });
+
+    await expect(
+      runtime.turn('hello', { signal: controller.signal })
+    ).rejects.toThrow(AbortError);
+
+    // All exported spans must have an endTime (no leaked open spans).
+    const spans = exporter.getSpans();
+    expect(spans.length).toBeGreaterThan(0);
+    for (const s of spans) {
+      expect(s.endTime).toBeDefined();
+    }
   });
 
   it('turn-level signal overrides runtime-level signal', async () => {

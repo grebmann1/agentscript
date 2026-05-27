@@ -12,7 +12,7 @@ compiled IR end-to-end on top of any LLM driver compatible with the
   guardrail rejects an attempt, the failed assistant message and the synthetic
   feedback message (`"Your response failed validation: ..."`) are kept in a
   per-call scratch buffer and forwarded to the next LLM step, but never written
-  to the canonical history. This applies to both `accept-last` and `throw`
+  to the canonical history. This applies to both `last-response` and `throw`
   exhaustion policies. **Downstream callers that snapshotted `runtime.history`
   for retry artifacts will see fewer entries.**
 - **`composeGuardrails` target filter now mirrors `runLlmStepWithGuardrails`.**

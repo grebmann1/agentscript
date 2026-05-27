@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { compileSource } from '@agentscript/agentforce';
 import { Runtime, ToolRegistry, FnAdapter } from '../src/index.js';
-import type { Middleware } from '../src/index.js';
+import type { Middleware, RuntimeEvent, Guardrail } from '../src/index.js';
 import { ScriptedLlm } from './helpers.js';
 
 const TOOL_SRC = `
@@ -261,6 +261,189 @@ describe('Middleware', () => {
 
     // mw-b (priority 50) should run before mw-a (priority 200)
     expect(order).toEqual(['B', 'A']);
+  });
+
+  // -----------------------------------------------------------------------
+  // Tier 2 — T2.6: middleware × guardrail retry contract.
+  //
+  // CONTRACT: With an output guardrail that rejects the first attempt and
+  // accepts the second, `beforeLlmStep` and `afterLlmStep` fire EXACTLY
+  // ONCE per outer reasoning iteration (not per attempt) — they bracket the
+  // guardrail-driven retry loop. `beforeToolCall` / `afterToolCall` fire
+  // ONCE per accepted tool call. Retries happen INSIDE
+  // runLlmStepWithGuardrails and are not re-bracketed by middleware. If
+  // this is later changed to fire per-attempt, this test will break and
+  // signal the new contract.
+  // -----------------------------------------------------------------------
+  it('middleware fires once-on-accept across guardrail retries', async () => {
+    const output = compileToolSrc();
+
+    const fn = new FnAdapter();
+    fn.register('do_something', () => ({ output: 'ok' }));
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    let nextId = 0;
+    const beforeArgs: Array<Record<string, unknown>> = [];
+    const beforeCalls: string[] = [];
+    const afterCalls: string[] = [];
+    const beforeLlmCalls: number[] = [];
+    const afterLlmCalls: number[] = [];
+
+    const middleware: Middleware = {
+      name: 'pin-contract',
+      beforeLlmStep() {
+        beforeLlmCalls.push(Date.now());
+        return undefined;
+      },
+      afterLlmStep() {
+        afterLlmCalls.push(Date.now());
+        return undefined;
+      },
+      beforeToolCall(ctx) {
+        beforeCalls.push(ctx.toolName);
+        const trace_id = ++nextId;
+        const stamped = { ...ctx.args, _trace_id: trace_id };
+        beforeArgs.push(stamped);
+        return { args: stamped };
+      },
+      afterToolCall(ctx) {
+        afterCalls.push(ctx.toolName);
+        return undefined;
+      },
+    };
+
+    // Output guardrail: rejects text containing "approved", accepts on retry.
+    const outputGuardrail: Guardrail = {
+      name: 'no-approved',
+      target: 'both',
+      maxRetries: 2,
+      validate(out) {
+        if (typeof out.text === 'string' && /approved/.test(out.text)) {
+          return { valid: false, reason: 'contains "approved"' };
+        }
+        return { valid: true };
+      },
+    };
+
+    // First LLM response: text "approved order..." + tool call.
+    // Second LLM response: clean revision text + tool call.
+    const llm = new ScriptedLlm([
+      {
+        text: 'approved order — submitting',
+        toolCalls: [{ id: 'c1', name: 'do_it', arguments: { input: 'first' } }],
+      },
+      {
+        text: 'submitting now',
+        toolCalls: [
+          { id: 'c2', name: 'do_it', arguments: { input: 'second' } },
+        ],
+      },
+      { text: 'Done.' },
+    ]);
+
+    const runtime = new Runtime({
+      doc: output,
+      llm,
+      tools,
+      middleware: [middleware],
+      guardrails: [outputGuardrail],
+    });
+    const events: RuntimeEvent[] = [];
+    runtime.on(e => events.push(e));
+
+    const result = await runtime.turn('test');
+    expect(result.assistantText).toContain('Done.');
+
+    // Two LLM attempts (first rejected, second accepted) — but beforeLlmStep
+    // and afterLlmStep each fired exactly ONCE for the reasoning iteration
+    // that produced the tool call, plus once more for the final reasoning
+    // iteration that produced "Done." — so total 2 each.
+    expect(beforeLlmCalls).toHaveLength(2);
+    expect(afterLlmCalls).toHaveLength(2);
+
+    // The tool was dispatched exactly once, with the ACCEPTED args (input:
+    // "second", from the second LLM attempt).
+    expect(beforeCalls).toHaveLength(1);
+    expect(afterCalls).toHaveLength(1);
+    expect(beforeArgs[0]).toMatchObject({
+      input: 'second',
+      _trace_id: 1,
+    });
+
+    // Guardrail did fire and retry once.
+    const fails = events.filter(e => e.kind === 'guardrail-fail');
+    const passes = events.filter(e => e.kind === 'guardrail-pass');
+    expect(fails).toHaveLength(1);
+    expect(passes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // -----------------------------------------------------------------------
+  // Tier 2 — T2.8: onError fallbackResult contract.
+  //
+  // CONTRACT: When a tool throws and a middleware's `onError` returns
+  // `{ fallbackResult }` (without `suppress: true`), the runtime currently
+  // emits a `tool-error` event AND surfaces the error in history. To
+  // actually swap in the fallback you must ALSO set `suppress: true` —
+  // suppress is what tells the runtime to use fallbackResult and continue.
+  // The existing 'onError suppresses with fallback result' test pins the
+  // happy path. Here we verify that with `suppress: true` + fallbackResult,
+  // no `tool-error` event reaches subscribers and the history entry is the
+  // fallback (NOT the error string).
+  // -----------------------------------------------------------------------
+  it('onError suppress + fallbackResult: no tool-error reaches subscribers, history has fallback', async () => {
+    const output = compileToolSrc();
+
+    const fn = new FnAdapter();
+    fn.register('do_something', () => {
+      throw new Error('flaky exploded');
+    });
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    const middleware: Middleware = {
+      name: 'recoverer',
+      onError() {
+        return {
+          suppress: true,
+          fallbackResult: { ok: true, recovered: true, output: 'fb' },
+        };
+      },
+    };
+
+    const llm = new ScriptedLlm([
+      {
+        toolCalls: [{ id: 'c1', name: 'do_it', arguments: { input: 'hello' } }],
+      },
+      { text: 'done' },
+    ]);
+
+    const runtime = new Runtime({
+      doc: output,
+      llm,
+      tools,
+      middleware: [middleware],
+    });
+    const events: RuntimeEvent[] = [];
+    runtime.on(e => events.push(e));
+
+    const result = await runtime.turn('test');
+    expect(result.assistantText).toBe('done');
+
+    // No tool-error event surfaced to subscribers.
+    const errs = events.filter(e => e.kind === 'tool-error');
+    expect(errs).toHaveLength(0);
+
+    // The history (visible to the next LLM call) carried the fallback,
+    // not the original error.
+    const toolMsgs = llm.calls[1].messages.filter(m => m.role === 'tool');
+    expect(toolMsgs).toHaveLength(1);
+    const content = JSON.parse(toolMsgs[0].content as string) as Record<
+      string,
+      unknown
+    >;
+    expect(content).toMatchObject({ ok: true, recovered: true });
+    expect(JSON.stringify(content)).not.toContain('flaky exploded');
   });
 
   it('failOpen catches middleware errors and continues', async () => {

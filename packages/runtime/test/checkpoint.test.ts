@@ -8,7 +8,12 @@ import {
   CheckpointVersionError,
   CHECKPOINT_SCHEMA_VERSION,
 } from '../src/index.js';
-import type { Checkpoint, LlmStepInput, StepEvent } from '../src/index.js';
+import type {
+  Checkpoint,
+  LlmStepInput,
+  StepEvent,
+  RuntimeEvent,
+} from '../src/index.js';
 import { ScriptedLlm } from './helpers.js';
 
 const DOC_WITH_STATE = `
@@ -284,6 +289,70 @@ describe('Checkpoint', () => {
 
     const remaining = await store.list();
     expect(remaining).toEqual(['cp-2']);
+  });
+
+  // -----------------------------------------------------------------------
+  // Tier 2 — T2.4: checkpoint mid-multi-topic, restore in fresh Runtime,
+  // resume cleanly. Tests JSON round-trip and resume on the post-handoff
+  // node without spurious delegation/zombie events.
+  // -----------------------------------------------------------------------
+  it('checkpoint after handoff -> JSON round-trip -> fresh Runtime resumes on B', async () => {
+    const { output } = compileSource(DOC_WITH_STATE);
+    const fn = new FnAdapter();
+    fn.register('increment', () => ({ value: 1 }));
+    const tools = new ToolRegistry();
+    tools.register('fn', fn);
+
+    // Turn 1: increment, then handoff to help.
+    const llm1 = new ScriptedLlm([
+      { toolCalls: [{ id: 'c1', name: 'increment', arguments: {} }] },
+      { toolCalls: [{ id: 'c2', name: 'go_to_help', arguments: {} }] },
+      { text: 'On help now.' },
+    ]);
+    const rt1 = new Runtime({ doc: output, llm: llm1, tools });
+    await rt1.turn('please help me');
+
+    // Verify we did handoff to "help"
+    expect(rt1.currentNodeName).toBe('help');
+    expect(rt1.state.get('counter')).toBe(1);
+
+    // Take checkpoint, JSON round-trip
+    const cp = rt1.checkpoint();
+    const json = JSON.stringify(cp);
+    const restored = JSON.parse(json) as typeof cp;
+    expect(restored.currentNode).toBe('help');
+
+    // Construct fresh Runtime from the restored checkpoint
+    const llm2 = new ScriptedLlm([{ text: 'still helping you.' }]);
+    const tools2 = new ToolRegistry();
+    tools2.register('fn', fn);
+    const rt2 = Runtime.fromCheckpoint(
+      { doc: output, llm: llm2, tools: tools2 },
+      restored
+    );
+
+    // State preserved
+    expect(rt2.state.get('counter')).toBe(1);
+    expect(rt2.currentNodeName).toBe('help');
+
+    // Turn 2: should fire node-enter for "help" (NOT for the start agent),
+    // and emit no delegation-start (no zombie).
+    const events: RuntimeEvent[] = [];
+    rt2.on(e => events.push(e));
+    const result = await rt2.turn('what next?');
+
+    expect(result.assistantText).toBe('still helping you.');
+    const nodeEnters = events.filter(e => e.kind === 'node-enter');
+    expect(nodeEnters.length).toBeGreaterThan(0);
+    expect(nodeEnters[0]).toMatchObject({ kind: 'node-enter', node: 'help' });
+    // No node-enter for the start agent on resumed turn
+    expect(
+      nodeEnters.some(e => e.kind === 'node-enter' && e.node === 'greeting')
+    ).toBe(false);
+
+    // No leftover delegation-start events
+    const delegStarts = events.filter(e => e.kind === 'delegation-start');
+    expect(delegStarts).toHaveLength(0);
   });
 
   it('state values including Context vars are preserved', async () => {

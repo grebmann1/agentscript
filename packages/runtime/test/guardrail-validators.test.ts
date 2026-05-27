@@ -427,6 +427,57 @@ describe('customGuardrail', () => {
 });
 
 // ---------------------------------------------------------------------------
+// T1.3 — Regex lastIndex isolation across guardrails / repeated calls
+// ---------------------------------------------------------------------------
+
+describe('T1.3 — regex lastIndex isolation', () => {
+  it('global regex shared across regex + content-policy keeps lastIndex untouched', async () => {
+    const pattern = /forbidden/g;
+    pattern.lastIndex = 7;
+
+    const regex = regexGuardrail({ pattern, invert: true });
+    const policy = contentPolicyGuardrail({ blocklist: [pattern] });
+
+    // First validator
+    await regex.validate(makeInput('forbidden in here'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+
+    // Second validator, reuses the same RegExp instance
+    await policy.validate(makeInput('also forbidden'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+
+    // Repeat to make sure neither call advanced or reset lastIndex.
+    await regex.validate(makeInput('still forbidden text'), makeCtx());
+    await policy.validate(makeInput('definitely forbidden'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+  });
+
+  it('sticky regex shared across two validators keeps lastIndex untouched', async () => {
+    const pattern = /target/y;
+    pattern.lastIndex = 7;
+
+    const regex = regexGuardrail({ pattern });
+    const policy = contentPolicyGuardrail({ blocklist: [pattern] });
+
+    await regex.validate(makeInput('xyztarget more'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+
+    await policy.validate(makeInput('another target line'), makeCtx());
+    expect(pattern.lastIndex).toBe(7);
+  });
+
+  it('plain string blocklist is wrapped case-insensitively', async () => {
+    const policy = contentPolicyGuardrail({ blocklist: ['forbidden'] });
+    const result = await policy.validate(
+      makeInput('Forbidden content here'),
+      makeCtx()
+    );
+    expect(result).toHaveProperty('valid', false);
+    expect((result as { reason: string }).reason).toContain('Blocked content');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // composeGuardrails
 // ---------------------------------------------------------------------------
 

@@ -644,6 +644,151 @@ describe('Guardrail Integration', () => {
     });
   });
 
+  describe('T1.2 — regex guardrail retry isolation', () => {
+    // Regression coverage: the rejected attempt and synthetic feedback used to
+    // leak into canonical history. Lock that down with a regex-driven retry.
+
+    it('single turn: rejected attempt and feedback never persist in history', async () => {
+      const output = compileMinimal();
+      const llm = new ScriptedLlm([
+        { text: 'FORBIDDEN_TOKEN here' },
+        { text: 'clean response' },
+      ]);
+
+      const guardrail = regexGuardrail({
+        pattern: /FORBIDDEN_TOKEN/,
+        invert: true,
+        maxRetries: 1,
+      });
+
+      const runtime = new Runtime({
+        doc: output,
+        llm,
+        tools: new ToolRegistry(),
+        guardrails: [guardrail],
+      });
+
+      const result = await runtime.turn('please respond');
+      expect(result.assistantText).toBe('clean response');
+
+      const checkpoint = runtime.checkpoint();
+      const assistantMessages = checkpoint.history.filter(
+        m => m.role === 'assistant'
+      );
+      expect(assistantMessages).toHaveLength(1);
+      expect((assistantMessages[0] as { content: string }).content).toBe(
+        'clean response'
+      );
+
+      // Nothing in the canonical history mentions the rejected token or
+      // any synthetic guardrail feedback.
+      for (const msg of checkpoint.history) {
+        if ('content' in msg && typeof msg.content === 'string') {
+          expect(msg.content).not.toContain('FORBIDDEN_TOKEN');
+          expect(msg.content).not.toContain('must NOT match pattern');
+          expect(msg.content).not.toMatch(/failed validation/i);
+        }
+      }
+    });
+
+    it('cross-turn: turn 2 LLM input never sees turn 1 feedback', async () => {
+      const output = compileMinimal();
+      const llm = new ScriptedLlm([
+        // Turn 1, attempt 1 — fails the guardrail.
+        { text: 'FORBIDDEN_TOKEN bad' },
+        // Turn 1, attempt 2 — passes.
+        { text: 'ok one' },
+        // Turn 2, attempt 1 — passes immediately.
+        { text: 'ok two' },
+      ]);
+
+      const guardrail = regexGuardrail({
+        pattern: /FORBIDDEN_TOKEN/,
+        invert: true,
+        maxRetries: 1,
+      });
+
+      const runtime = new Runtime({
+        doc: output,
+        llm,
+        tools: new ToolRegistry(),
+        guardrails: [guardrail],
+      });
+
+      const r1 = await runtime.turn('first');
+      expect(r1.assistantText).toBe('ok one');
+
+      const r2 = await runtime.turn('second');
+      expect(r2.assistantText).toBe('ok two');
+
+      const checkpoint = runtime.checkpoint();
+      const userMessages = checkpoint.history.filter(m => m.role === 'user');
+      const assistantMessages = checkpoint.history.filter(
+        m => m.role === 'assistant'
+      );
+
+      // History is exactly [user:first, assistant:ok one, user:second, assistant:ok two].
+      expect(userMessages).toHaveLength(2);
+      expect(assistantMessages).toHaveLength(2);
+      expect((userMessages[0] as { content: string }).content).toBe('first');
+      expect((userMessages[1] as { content: string }).content).toBe('second');
+      expect((assistantMessages[0] as { content: string }).content).toBe(
+        'ok one'
+      );
+      expect((assistantMessages[1] as { content: string }).content).toBe(
+        'ok two'
+      );
+
+      // The third LLM call (turn-2-attempt-1) must not see any feedback or
+      // rejected attempt content from turn 1.
+      expect(llm.calls).toHaveLength(3);
+      const turn2Call = llm.calls[2];
+      for (const msg of turn2Call.messages) {
+        if ('content' in msg && typeof msg.content === 'string') {
+          expect(msg.content).not.toContain('FORBIDDEN_TOKEN');
+          expect(msg.content).not.toContain('must NOT match pattern');
+          expect(msg.content).not.toMatch(/failed validation/i);
+        }
+      }
+
+      // Bonus: a fresh runtime restored from the checkpoint between turns
+      // also sees clean history when running turn 2.
+      const midCheckpointLlm = new ScriptedLlm([
+        { text: 'FORBIDDEN_TOKEN bad' },
+        { text: 'ok one' },
+      ]);
+      const rt1 = new Runtime({
+        doc: output,
+        llm: midCheckpointLlm,
+        tools: new ToolRegistry(),
+        guardrails: [guardrail],
+      });
+      await rt1.turn('first');
+      const mid = rt1.checkpoint();
+
+      const rt2Llm = new ScriptedLlm([{ text: 'ok two' }]);
+      const rt2 = Runtime.fromCheckpoint(
+        {
+          doc: output,
+          llm: rt2Llm,
+          tools: new ToolRegistry(),
+          guardrails: [guardrail],
+        },
+        mid
+      );
+      await rt2.turn('second');
+
+      expect(rt2Llm.calls).toHaveLength(1);
+      for (const msg of rt2Llm.calls[0].messages) {
+        if ('content' in msg && typeof msg.content === 'string') {
+          expect(msg.content).not.toContain('FORBIDDEN_TOKEN');
+          expect(msg.content).not.toContain('must NOT match pattern');
+          expect(msg.content).not.toMatch(/failed validation/i);
+        }
+      }
+    });
+  });
+
   describe('composeGuardrails utility', () => {
     it('composed guardrail fails if any child fails', async () => {
       const output = compileMinimal();
