@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" role="img" aria-label="A request flowing into @agentscript/server, through @agentscript/runtime-vercel, into @agentscript/runtime, with a streamed response leaving — all running on a Heroku dyno.">
+  <defs>
+    <style>
+      .label-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; font-weight: 600; }
+      .label-tag  { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
+      .label-body { font-family: 'Inter', system-ui, sans-serif; font-size: 11px; }
+      .stroke-navy  { stroke: #032d60; }
+      .stroke-brand { stroke: #0176d3; }
+      .stroke-success { stroke: #2e844a; }
+
+      @keyframes flow-in {
+        0%   { opacity: 0; transform: translateX(0); }
+        15%  { opacity: 1; }
+        85%  { opacity: 1; }
+        100% { opacity: 0; transform: translateX(86px); }
+      }
+      @keyframes flow-out {
+        0%   { opacity: 0; transform: translateX(0); }
+        15%  { opacity: 1; }
+        85%  { opacity: 1; }
+        100% { opacity: 0; transform: translateX(86px); }
+      }
+      .ping-in  { fill: #0176d3; animation: flow-in 2.4s ease-in-out infinite; }
+      .ping-out { fill: #2e844a; animation: flow-out 2.4s ease-in-out infinite 1.2s; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .ping-in, .ping-out { animation: none; opacity: 0.7; }
+      }
+    </style>
+  </defs>
+
+  <!-- ================= Heroku platform plate ================= -->
+  <g>
+    <rect x="40" y="296" width="640" height="40" rx="8" fill="#032d60"/>
+    <circle cx="62" cy="316" r="5" fill="#a8c7ee"/>
+    <text x="78" y="320" class="label-mono" fill="#ffffff">heroku</text>
+    <text x="138" y="320" class="label-tag" fill="#a8c7ee">DYNO · WEB · PORT $PORT</text>
+    <text x="660" y="320" class="label-tag" fill="#a8c7ee" text-anchor="end">git push heroku main</text>
+  </g>
+
+  <!-- ================= Layer 1: @agentscript/server ================= -->
+  <g>
+    <rect x="120" y="36" width="480" height="240" rx="12" fill="#ffffff" class="stroke-navy" stroke-width="1.4" stroke-opacity="0.55"/>
+    <text x="138" y="58" class="label-mono" fill="#032d60">@agentscript/server</text>
+    <text x="138" y="74" class="label-tag" fill="#706e6b">REST · SSE · WEBSOCKET</text>
+  </g>
+
+  <!-- ================= Layer 2: @agentscript/runtime-vercel ================= -->
+  <g>
+    <rect x="156" y="92" width="408" height="166" rx="10" fill="#d8edff" class="stroke-brand" stroke-width="1.6"/>
+    <text x="174" y="114" class="label-mono" fill="#0176d3">@agentscript/runtime-vercel</text>
+    <text x="174" y="130" class="label-tag" fill="#155a92">AI SDK · ANTHROPIC · STREAMING</text>
+  </g>
+
+  <!-- ================= Layer 3: @agentscript/runtime ================= -->
+  <g>
+    <rect x="196" y="146" width="328" height="96" rx="8" fill="#ffffff" class="stroke-brand" stroke-width="1.4"/>
+    <text x="214" y="168" class="label-mono" fill="#032d60">@agentscript/runtime</text>
+
+    <!-- agent + tool chips -->
+    <g transform="translate(214, 184)">
+      <rect x="0" y="0" width="116" height="22" rx="4" fill="#fafaf9" stroke="#dddbda" stroke-width="1"/>
+      <text x="10" y="15" class="label-body" fill="#444444">support.agent</text>
+    </g>
+    <g transform="translate(338, 184)">
+      <rect x="0" y="0" width="118" height="22" rx="4" fill="#fafaf9" stroke="#dddbda" stroke-width="1"/>
+      <circle cx="14" cy="11" r="4" fill="#0176d3"/>
+      <text x="26" y="15" class="label-body" fill="#444444">lookup_order</text>
+    </g>
+    <text x="214" y="226" class="label-tag" fill="#706e6b">TOOLS · STATE · GUARDRAILS</text>
+  </g>
+
+  <!-- ================= Inbound request ================= -->
+  <g>
+    <text x="22" y="148" class="label-mono" fill="#0176d3">POST</text>
+    <text x="22" y="164" class="label-body" fill="#444444">/messages</text>
+    <line x1="22" y1="184" x2="116" y2="184" class="stroke-brand" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
+    <path d="M108 178 L 118 184 L 108 190" fill="none" class="stroke-brand" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="22" cy="184" r="4" class="ping-in"/>
+  </g>
+
+  <!-- ================= Outbound response ================= -->
+  <g>
+    <text x="698" y="148" class="label-mono" fill="#2e844a" text-anchor="end">SSE</text>
+    <text x="698" y="164" class="label-body" fill="#444444" text-anchor="end">stream</text>
+    <line x1="604" y1="184" x2="698" y2="184" class="stroke-success" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
+    <path d="M690 178 L 700 184 L 690 190" fill="none" class="stroke-success" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="604" cy="184" r="4" class="ping-out"/>
+  </g>
+</svg>

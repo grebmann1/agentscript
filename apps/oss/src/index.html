@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AgentScript OSS — agents that read like code</title>
+    <meta name="description" content="AgentScript OSS is an open-source TypeScript stack for compiling, running, and serving LLM agents. Three packages. Deploy in five minutes." />
+
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="./assets/styles.css" />
+
+    <meta property="og:title" content="AgentScript OSS — agents that read like code" />
+    <meta property="og:description" content="AgentScript OSS is an open-source TypeScript stack for compiling, running, and serving LLM agents. Three packages. Deploy in five minutes." />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container">
+        <a class="brand" href="/">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 19 L12 5 L19 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <line x1="8" y1="14.5" x2="16" y2="14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          AgentScript <span class="brand-tag">OSS</span>
+        </a>
+        <nav class="nav">
+          <a class="desktop" href="#packages">Packages</a>
+          <a class="desktop" href="#quickstart">Quickstart</a>
+          <a class="desktop" href="#deploy">Deploy</a>
+          <a class="desktop" href="/docs/">Docs</a>
+          <a class="pill" href="https://github.com/salesforce/agentscript">GitHub →</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container hero-grid">
+          <div>
+            <div class="eyebrow"><span class="dot"></span> v0.1 · Apache-2.0</div>
+            <h1 class="hero-title">Agents that read <em>like code.</em></h1>
+            <p class="hero-sub">
+              <strong>AgentScript OSS</strong> is an open-source TypeScript
+              stack for compiling, running, and serving LLM agents. Three
+              packages. Deploy in five minutes.
+            </p>
+            <div class="cta">
+              <a class="btn primary" href="#quickstart">Get started <span class="arrow">→</span></a>
+              <a class="btn" href="https://github.com/salesforce/agentscript">Star on GitHub</a>
+            </div>
+          </div>
+          <div>
+            <img class="hero-art" src="./assets/hero.svg" alt="A request entering @agentscript/server, flowing through the runtime-vercel adapter and the runtime tools, then streaming a response — running on a Heroku web dyno." />
+          </div>
+        </div>
+      </section>
+
+      <section id="stack" class="alt">
+        <div class="container">
+          <p class="section-eyebrow">The stack</p>
+          <h2 class="section-title">A typed scripting language for LLM agents — with a runtime, an SDK adapter, and a server.</h2>
+          <p class="section-lead">
+            AgentScript OSS compiles a small declarative DSL into an
+            intermediate representation. The runtime executes it. The Vercel
+            adapter wires in any AI SDK provider. The server hosts agents over
+            HTTP, SSE, and WebSocket. Mix or match.
+          </p>
+          <div class="stack-pillars">
+            <div class="pillar">
+              <div class="num">01</div>
+              <h3>Write the agent</h3>
+              <p>A few lines of declarative DSL — tools, state, message handlers.</p>
+            </div>
+            <div class="pillar">
+              <div class="num">02</div>
+              <h3>Run it locally</h3>
+              <p>Compile, register tools, stream tokens through any AI SDK model.</p>
+            </div>
+            <div class="pillar">
+              <div class="num">03</div>
+              <h3>Ship it</h3>
+              <p>One Procfile, one Heroku app, one URL. Sessions, SSE, WebSocket.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="packages">
+        <div class="container">
+          <p class="section-eyebrow">Packages</p>
+          <h2 class="section-title">Three layers. Each one usable on its own.</h2>
+          <p class="section-lead">
+            Pick the layer that matches your integration. The runtime is enough
+            if you bring your own LLM driver. Most users start with the Vercel
+            adapter. Production deployments add the server.
+          </p>
+
+          <div class="packages">
+            <article class="pkg">
+              <div class="pkg-head">
+                <span class="pkg-name">@agentscript/runtime</span>
+                <span class="pkg-version">v0.1</span>
+              </div>
+              <p class="pkg-tagline">The execution core.</p>
+              <p class="pkg-desc">
+                Lightweight TypeScript runtime that executes compiled
+                AgentScript&nbsp;OSS IR. Tools, state, guardrails, tracing, and
+                checkpoints. Bring your own LLM driver.
+              </p>
+              <pre data-lang="ts"><code>import { Runtime, ToolRegistry, FnAdapter } from '@agentscript/runtime';
+
+const fn = new FnAdapter();
+fn.register('lookup_order', async ({ id }) =&gt; ({ status: 'shipped' }));
+
+const tools = new ToolRegistry();
+tools.register('fn', fn);
+
+const runtime = new Runtime({ doc, tools, llm: myDriver });
+const result = await runtime.run('check ORD-42');</code></pre>
+            </article>
+
+            <article class="pkg">
+              <div class="pkg-head">
+                <span class="pkg-name">@agentscript/runtime-vercel</span>
+                <span class="pkg-version">v0.1</span>
+              </div>
+              <p class="pkg-tagline">Plug in any AI SDK model.</p>
+              <p class="pkg-desc">
+                Vercel AI SDK adapter. Anthropic, OpenAI, Google, or any
+                AI-SDK-compatible provider, with one factory call. Streaming,
+                tool dispatch, and state — handled.
+              </p>
+              <pre data-lang="ts"><code>import { generateText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { compileSource, createAgent } from '@agentscript/runtime-vercel';
+
+const { output } = compileSource(source);
+const agent = createAgent({
+  doc: output,
+  llm: { model: anthropic('claude-haiku-4-5'), generateText },
+  tools,
+});
+const stream = agent.stream('check ORD-42');</code></pre>
+            </article>
+
+            <article class="pkg span-2">
+              <div class="pkg-head">
+                <span class="pkg-name">@agentscript/server</span>
+                <span class="pkg-version">v0.1</span>
+              </div>
+              <p class="pkg-tagline">Production HTTP server. Sessions, SSE, WebSocket.</p>
+              <p class="pkg-desc">
+                Hono-based server with REST, Server-Sent Events, and WebSocket
+                sessions. In-memory or Postgres storage. Bearer auth, rate
+                limiting, circuit breakers, request timeouts — all configured
+                via environment variables.
+              </p>
+              <pre data-lang="bash"><code>AGENTS_DIR=./agents \
+LLM_API_KEY=$ANTHROPIC_API_KEY \
+LLM_MODEL=claude-haiku-4-5 \
+LLM_BASE_URL=https://api.anthropic.com/v1 \
+node packages/server/dist/index.js</code></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart" class="alt">
+        <div class="container">
+          <p class="section-eyebrow">Quickstart</p>
+          <h2 class="section-title">From <em>zero</em> to a streaming agent in five steps.</h2>
+          <p class="section-lead">
+            One running example: an order-tracker support agent with a single
+            <code>lookup_order</code> tool. Copy each block top-to-bottom.
+          </p>
+
+          <div class="steps">
+            <div class="step">
+              <div>
+                <h3>Install</h3>
+                <p>Add the three packages and your AI SDK provider of choice.</p>
+                <pre data-lang="bash"><code>pnpm add @agentscript/runtime @agentscript/runtime-vercel @agentscript/server \
+         ai @ai-sdk/anthropic</code></pre>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Write <code>agents/support.agent</code></h3>
+                <p>A handful of declarative lines. The compiler turns this into IR the runtime can execute.</p>
+                <pre data-lang="agent"><code>agent support {
+  description: "Help customers check order status."
+  tool lookup_order(order_number: string) -&gt; { status: string }
+
+  on_message(text) {
+    let order = extract_order_number(text)
+    let result = lookup_order(order_number: order)
+    reply("Order " + order + " is " + result.status + ".")
+  }
+}</code></pre>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Register the tool</h3>
+                <p>Tools are plain TypeScript functions. The server picks them up via the registry.</p>
+                <pre data-lang="ts"><code>import { ToolRegistry, FnAdapter } from '@agentscript/runtime';
+
+const fn = new FnAdapter();
+fn.register('lookup_order', async ({ order_number }) =&gt; ({
+  status: order_number === 'ORD-42' ? 'shipped' : 'unknown',
+}));
+
+export const tools = new ToolRegistry();
+tools.register('fn', fn);</code></pre>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Start the server</h3>
+                <p>The server loads <code>.agent</code> files from <code>AGENTS_DIR</code>, compiles them at boot, and exposes them over REST + SSE + WebSocket.</p>
+                <pre data-lang="bash"><code>AGENTS_DIR=./agents \
+LLM_API_KEY=$ANTHROPIC_API_KEY \
+LLM_MODEL=claude-haiku-4-5 \
+LLM_BASE_URL=https://api.anthropic.com/v1 \
+node packages/server/dist/index.js</code></pre>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Talk to it</h3>
+                <p>Open a session, then stream a reply over SSE.</p>
+                <pre data-lang="bash"><code>SID=$(curl -s -X POST localhost:8080/einstein/ai-agent/v1/agents/support/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"u1"}' | jq -r .sessionId)
+
+curl -N -X POST localhost:8080/einstein/ai-agent/v1/sessions/$SID/messages \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"message":"check ORD-42"}'</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="deploy">
+        <div class="container">
+          <p class="section-eyebrow">Deploy</p>
+          <h2 class="section-title">Heroku, in five commands.</h2>
+          <p class="section-lead">
+            The server runs on a single web dyno. Optional Postgres for durable
+            sessions. Set three env vars and push.
+          </p>
+
+          <div class="deploy-grid">
+            <div>
+              <pre data-lang="bash"><code># Procfile
+web: node packages/server/dist/index.js</code></pre>
+
+              <p style="margin-top: 24px"></p>
+
+              <pre data-lang="bash"><code>heroku create my-agent
+heroku buildpacks:set heroku/nodejs
+heroku config:set LLM_API_KEY=sk-... \
+                  LLM_MODEL=claude-haiku-4-5 \
+                  LLM_BASE_URL=https://api.anthropic.com/v1
+heroku addons:create heroku-postgresql:essential-0   # optional
+git push heroku main</code></pre>
+            </div>
+
+            <div>
+              <table class="env-table">
+                <thead>
+                  <tr><th>Variable</th><th>Required</th><th>Notes</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td class="var">LLM_API_KEY</td><td class="req">yes</td><td class="note">Provider key</td></tr>
+                  <tr><td class="var">LLM_MODEL</td><td class="req">yes</td><td class="note">e.g. <code>claude-haiku-4-5</code></td></tr>
+                  <tr><td class="var">LLM_BASE_URL</td><td class="req">yes</td><td class="note">Provider base URL</td></tr>
+                  <tr><td class="var">AGENTS_DIR</td><td class="note">opt</td><td class="note">Path to <code>.agent</code> files</td></tr>
+                  <tr><td class="var">SESSION_STORE_BACKEND</td><td class="note">opt</td><td class="note"><code>memory</code> (default) or <code>postgres</code></td></tr>
+                  <tr><td class="var">POSTGRES_URL</td><td class="note">cond.</td><td class="note">Auto-injected by the Postgres add-on</td></tr>
+                  <tr><td class="var">API_AUTH_TOKENS</td><td class="note">opt</td><td class="note">Comma-separated bearer tokens</td></tr>
+                  <tr><td class="var">PORT</td><td class="note">auto</td><td class="note">Set by Heroku</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="footer-row">
+          <span class="brand-line">
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 19 L12 5 L19 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+              <line x1="8" y1="14.5" x2="16" y2="14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            AgentScript <span class="brand-tag on-deep">OSS</span>
+          </span>
+          <div>
+            <a href="https://github.com/salesforce/agentscript">GitHub</a> ·
+            <a href="/docs/">Docs</a> ·
+            <a href="https://www.npmjs.com/org/agentscript">npm</a> ·
+            <a href="https://github.com/salesforce/agentscript/blob/main/LICENSE.txt">License</a>
+          </div>
+        </div>
+        <div class="meta">
+          © Salesforce, Inc. · Apache-2.0 · Built by the AgentScript OSS team.
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="./assets/site.js"></script>
+  </body>
+</html>

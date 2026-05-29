@@ -1,0 +1,13 @@
+{
+  "name": "@agentscript/oss-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentScript open-source landing site.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "clean": "rm -rf dist"
+  },
+  "license": "Apache-2.0"
+}
