@@ -1,0 +1,66 @@
+system:
+    instructions: "You are a concise support assistant that follows a three-step workflow."
+    messages:
+        error: "Sorry, something went wrong while running the workflow."
+        welcome: "Hi, I can run a short multi-step support workflow."
+
+config:
+    agent_name: "MultiStepSupportAgent"
+    default_agent_user: "support@example.com"
+
+language:
+    default_locale: "en_US"
+
+variables:
+    workflow_started: mutable boolean = False
+        description: "Whether the workflow has started"
+    issue_summary: mutable string = ""
+        description: "Brief summary of the user's issue"
+    recommended_action: mutable string = ""
+        description: "Recommended next action"
+    workflow_complete: mutable boolean = False
+        description: "Whether the workflow is complete"
+
+start_agent intake:
+    description: "Step 1: collect and acknowledge the support request"
+
+    before_reasoning:
+        if @variables.workflow_started == False:
+            set @variables.workflow_started = True
+
+    reasoning:
+        instructions: ->
+            | Step 1 of 3: Intake.
+            | Acknowledge the user's request, identify the issue in one short sentence,
+            | and say that you will assess it next.
+
+    after_reasoning:
+        transition to @topic.assessment
+
+topic assessment:
+    description: "Step 2: assess the support request"
+
+    before_reasoning:
+        if @variables.recommended_action == "":
+            set @variables.recommended_action = "Review the account/order context and provide a concise recommendation."
+
+    reasoning:
+        instructions: ->
+            | Step 2 of 3: Assessment.
+            | Explain the likely category of the issue and provide one recommended action.
+            | Recommended action: {! @variables.recommended_action }
+
+    after_reasoning:
+        transition to @topic.resolution_summary
+
+topic resolution_summary:
+    description: "Step 3: summarize the result"
+
+    before_reasoning:
+        set @variables.workflow_complete = True
+
+    reasoning:
+        instructions: ->
+            | Step 3 of 3: Summary.
+            | Summarize the completed workflow in two bullets.
+            | Include the exact phrase: multi-step workflow complete.

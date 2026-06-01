@@ -8,7 +8,10 @@
 import { VariableDeclarationNode } from '@agentscript/language';
 import type { Range } from '@agentscript/types';
 import type { Diagnostic } from './diagnostics.js';
-import type { AgentDSLAuthoring } from './types.js';
+import type {
+  AgentDSLAuthoring,
+  AgentDSLAuthoringWithDeployment,
+} from './types.js';
 import type { ParsedAgentforce } from './parsed-types.js';
 import { CompilerContext } from './compiler-context.js';
 import { SCHEMA_VERSION } from './constants.js';
@@ -22,6 +25,8 @@ import { compileContextVariables } from './config/context-variables.js';
 import { compileSecurity } from './config/compile-security.js';
 import { compileAgentVersion } from './agent-version/compile-agent-version.js';
 import { compileContext } from './context/compile-context.js';
+import { compileDeployment } from './deployment/compile-deployment.js';
+import { extractStringValue, iterateNamedMap } from './ast-helpers.js';
 import { agentDslAuthoring, contextConfigurationSchema } from './types.js';
 
 /**
@@ -122,9 +127,53 @@ export function compile(ast: ParsedAgentforce): CompileResult {
     }
   }
 
+  // Step 10: Compile optional deployment block (companion schema; OSS server only).
+  // No runtime behavior change — IR carries the data; nothing reads it yet.
+  const astWithDeployment = ast as ParsedAgentforce & {
+    deployment?: unknown;
+  };
+  if (astWithDeployment.deployment) {
+    const actionTargets = collectActionTargets(ast);
+    const deployment = compileDeployment(
+      astWithDeployment.deployment,
+      ctx,
+      actionTargets
+    );
+    if (deployment) {
+      (output as AgentDSLAuthoringWithDeployment).deployment = deployment;
+    }
+  }
+
   return {
     output,
     ranges: ctx.ranges,
     diagnostics: ctx.diagnostics,
   };
+}
+
+/**
+ * Collect every `target:` URI declared on actions across topic/subagent/start_agent
+ * blocks. Used to cross-validate `mcp://server/tool` targets against declared
+ * MCP servers in the deployment block.
+ */
+function collectActionTargets(ast: ParsedAgentforce): string[] {
+  const targets: string[] = [];
+  const blockMaps = [ast.topic, ast.subagent, ast.start_agent];
+  for (const blockMap of blockMaps) {
+    for (const [, block] of iterateNamedMap(
+      blockMap as Map<string, Record<string, unknown>> | undefined
+    )) {
+      const actions = (block as Record<string, unknown>).actions;
+      if (!actions) continue;
+      for (const [, def] of iterateNamedMap(
+        actions as Map<string, Record<string, unknown>>
+      )) {
+        const target = extractStringValue(
+          (def as Record<string, unknown>).target
+        );
+        if (target) targets.push(target);
+      }
+    }
+  }
+  return targets;
 }

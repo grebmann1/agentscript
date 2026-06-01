@@ -50,6 +50,7 @@ export default [
             'packages/parser-javascript/test/*.test.ts',
             'packages/runtime/test/*.test.ts',
             'packages/runtime-vercel/test/*.test.ts',
+            'packages/server/tests/*.test.ts',
           ],
           maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 40,
         },

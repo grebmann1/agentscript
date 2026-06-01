@@ -161,3 +161,84 @@ export interface FormatTool {
   name: string;
   description: string;
 }
+
+// ---------------------------------------------------------------------------
+// Deployment metadata (companion schema; lives outside agentDslAuthoring so
+// existing dialects compile unchanged. Read by the OSS Heroku server only.)
+// ---------------------------------------------------------------------------
+
+const envRefSchema = z.object({
+  kind: z.literal('env'),
+  name: z.string(),
+  prefix: z.string().optional(),
+  default: z.string().optional(),
+});
+
+const envOrStringSchema = z.union([envRefSchema, z.string()]);
+
+const llmProviderSchema = z.enum([
+  'anthropic',
+  'openai',
+  'google',
+  'openai-compatible',
+]);
+
+const llmFallbackSchema = z.object({
+  provider: llmProviderSchema,
+  model: z.string(),
+  api_key: envOrStringSchema.optional(),
+  base_url: envOrStringSchema.optional(),
+});
+
+const llmConfigSchema = llmFallbackSchema.extend({
+  fallback: llmFallbackSchema.optional(),
+});
+
+const mcpAuthSchema = z.discriminatedUnion('strategy', [
+  z.object({
+    strategy: z.literal('api_key'),
+    key: envOrStringSchema,
+  }),
+  z.object({
+    strategy: z.literal('bearer'),
+    key: envOrStringSchema,
+  }),
+  z.object({
+    strategy: z.literal('none'),
+  }),
+]);
+
+const mcpServerSchema = z.object({
+  transport: z.enum(['http', 'streamable-http']),
+  url: envOrStringSchema,
+  headers: z.record(z.string(), envOrStringSchema).optional(),
+  auth: mcpAuthSchema.optional(),
+});
+
+const serverConfigSchema = z.object({
+  auth_token: envOrStringSchema.optional(),
+  rate_limit_rpm: envOrStringSchema.optional(),
+  session_store: z.enum(['memory', 'postgres']).optional(),
+});
+
+export const deploymentConfigSchema = z.object({
+  llm: llmConfigSchema.optional(),
+  mcp: z.record(z.string(), mcpServerSchema).optional(),
+  server: serverConfigSchema.optional(),
+});
+
+export type EnvRef = z.infer<typeof envRefSchema>;
+export type DeploymentValue = z.infer<typeof envOrStringSchema>;
+export type LlmConfig = z.infer<typeof llmConfigSchema>;
+export type McpServerConfig = z.infer<typeof mcpServerSchema>;
+export type ServerConfig = z.infer<typeof serverConfigSchema>;
+export type DeploymentConfig = z.infer<typeof deploymentConfigSchema>;
+
+/**
+ * AgentDSLAuthoring augmented with the optional deployment block. The block
+ * is attached after the generated schema validates the rest of the document,
+ * so non-deployable dialects ignore it.
+ */
+export type AgentDSLAuthoringWithDeployment = AgentDSLAuthoring & {
+  deployment?: DeploymentConfig;
+};

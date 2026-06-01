@@ -27,7 +27,8 @@
  *   - namedQuery://              — Named Query
  *   - integrationProcedureAction:// — Integration Procedure Action
  *   - executeIntegrationProcedure:// — Execute Integration Procedure
- *   - mcpTool://                 — Model Context Protocol Tool
+ *   - mcp://                     — Model Context Protocol tool (mcp://server/tool)
+ *   - mcpTool://                 — Deprecated alias for mcp://
  *   - expressionSet://           — Expression Set
  *   - runExpressionSet://        — Run Expression Set
  *   - retriever://               — Knowledge Retriever
@@ -62,8 +63,10 @@ const VALID_SCHEMES = [
   'externalConnector',
   'externalService',
   'flow',
+  'fn',
   'generatePromptResponse',
   'integrationProcedureAction',
+  'mcp',
   'mcpTool',
   'namedQuery',
   'placeholder',
@@ -157,6 +160,20 @@ export function actionTargetSchemeRule(): LintPass {
               `Replace this with a real implementation before committing.`,
             DiagnosticSeverity.Warning,
             'placeholder-action-target'
+          )
+        );
+      }
+
+      // Deprecated: mcpTool:// → mcp://
+      if (scheme === 'mcptool') {
+        attachDiagnostic(
+          target.node,
+          lintDiagnostic(
+            target.keyRange,
+            `Action '${actionName}' uses deprecated scheme "mcpTool://". ` +
+              `Use "mcp://<server>/<tool>" instead.`,
+            DiagnosticSeverity.Warning,
+            'deprecated-action-target'
           )
         );
       }

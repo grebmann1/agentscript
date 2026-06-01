@@ -1,0 +1,39 @@
+{
+  "info": {
+    "name": "AgentScript Agentforce-style API",
+    "_postman_id": "a8c5c9b7-4d17-4dc2-a4c3-d86bfeb3f9fe",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Start Session",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{baseUrl}}/einstein/ai-agent/v1/agents/{{agentId}}/sessions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"externalSessionKey\": \"{{externalSessionKey}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Send Message Sync",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{baseUrl}}/einstein/ai-agent/v1/sessions/{{sessionId}}/messages",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": {\n    \"sequenceId\": 1,\n    \"type\": \"Text\",\n    \"text\": \"Hello\"\n  }\n}"
+        }
+      }
+    }
+  ]
+}

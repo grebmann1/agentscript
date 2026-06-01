@@ -45,6 +45,18 @@ export function parseUri(uri: string): { scheme: string; path: string } {
 }
 
 /**
+ * Parse a two-segment MCP tool URI of the form `mcp://<server>/<tool>`.
+ * Returns null when the URI is not an MCP URI or is malformed.
+ */
+export function parseMcpUri(
+  uri: string
+): { server: string; tool: string } | null {
+  const match = uri.match(/^mcp:\/\/([^/]+)\/(.+)$/);
+  if (!match) return null;
+  return { server: match[1], tool: match[2] };
+}
+
+/**
  * Convert a config block label to the expected output format.
  * If label is not explicitly set, generate from developer_name using Title Case.
  */

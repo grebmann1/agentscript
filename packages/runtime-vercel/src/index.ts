@@ -23,6 +23,11 @@ export type {
   GenerateTextFn,
 } from './driver.js';
 
+// Bridge for exposing MCP servers configured via `deployment.mcp` as Vercel AI
+// SDK tools. Pair with `createMcpAdapter()` from `@agentscript/server`.
+export { mcpToolsForVercel } from './mcp-tools.js';
+export type { VercelToolFactories } from './mcp-tools.js';
+
 /**
  * Re-export the compile pipeline so consumers of this package don't need to
  * separately depend on @agentscript/agentforce. We intentionally narrow the

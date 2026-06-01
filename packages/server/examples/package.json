@@ -1,0 +1,12 @@
+{
+  "name": "@agentscript/server-local-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=../../../.env local-agent-api-client.mjs"
+  },
+  "dependencies": {
+    "@agentscript/server": "workspace:*",
+    "ws": "^8.18.3"
+  }
+}

@@ -1,0 +1,113 @@
+system:
+    instructions: "You are a concise order support assistant. Verify the customer before sharing order status."
+    messages:
+        error: "Sorry, something went wrong while checking the order."
+        welcome: "Hi, I can verify you and check an order."
+
+config:
+    agent_name: "OrderFlowAgent"
+    default_agent_user: "orders@example.com"
+
+language:
+    default_locale: "en_US"
+
+variables:
+    customer_email: mutable string = ""
+        description: "Customer email address"
+    customer_verified: mutable boolean = False
+        description: "Whether the customer has been verified"
+    customer_name: mutable string = ""
+        description: "Verified customer name"
+    order_number: mutable string = ""
+        description: "Order number to look up"
+    order_status: mutable string = ""
+        description: "Order status returned from lookup"
+    order_ready: mutable boolean = False
+        description: "Whether order details are ready to summarize"
+
+start_agent order_flow:
+    description: "Verify a customer, look up an order, then summarize the result"
+
+    actions:
+        Verify_Customer:
+            description: "Verify customer by email"
+            inputs:
+                email: string
+                    description: "Customer email address"
+                    is_required: True
+            outputs:
+                verified: boolean
+                    description: "Whether the customer is verified"
+                customer_name: string
+                    description: "Verified customer name"
+            target: "fn://verify_customer"
+
+        Lookup_Order:
+            description: "Look up order status by order number"
+            inputs:
+                order_number: string
+                    description: "Order number"
+                    is_required: True
+            outputs:
+                status: string
+                    description: "Order status"
+                order_id: string
+                    description: "Order identifier"
+            target: "fn://lookup_order"
+
+    before_reasoning:
+        if @variables.customer_email != "" and @variables.customer_verified == False:
+            run @actions.Verify_Customer
+                with email=@variables.customer_email
+                set @variables.customer_verified = @outputs.verified
+                set @variables.customer_name = @outputs.customer_name
+
+        if @variables.customer_verified and @variables.order_number != "" and @variables.order_status == "":
+            run @actions.Lookup_Order
+                with order_number=@variables.order_number
+                set @variables.order_status = @outputs.status
+                set @variables.order_ready = True
+
+    reasoning:
+        instructions: ->
+            | Collect the customer's email and order number if missing.
+            | When both are available, use the available actions to verify the customer and look up the order.
+            | Current state:
+            | - email: {! @variables.customer_email }
+            | - verified: {! @variables.customer_verified }
+            | - order: {! @variables.order_number }
+            | - status: {! @variables.order_status }
+            | If the user provides details, capture them, verify the customer, look up the order, and summarize clearly.
+        actions:
+            capture_details: @utils.setVariables
+                description: "Capture customer email and order number from the user"
+                with customer_email=@variables.customer_email
+                with order_number=@variables.order_number
+
+            verify_customer: @actions.Verify_Customer
+                with email=@variables.customer_email
+                set @variables.customer_verified = @outputs.verified
+                set @variables.customer_name = @outputs.customer_name
+
+            lookup_order: @actions.Lookup_Order
+                with order_number=@variables.order_number
+                set @variables.order_status = @outputs.status
+                set @variables.order_ready = True
+
+            show_summary: @utils.transition to @subagent.order_summary
+                description: "Show the verified order summary"
+                available when @variables.order_ready == True
+
+    after_reasoning:
+        if @variables.order_ready == True:
+            transition to @subagent.order_summary
+
+subagent order_summary:
+    description: "Summarize verified order status"
+    reasoning:
+        instructions: ->
+            | Summarize the verified order in one or two sentences.
+            | Customer: {! @variables.customer_name }
+            | Email: {! @variables.customer_email }
+            | Order: {! @variables.order_number }
+            | Status: {! @variables.order_status }

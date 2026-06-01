@@ -35,6 +35,24 @@ export type { RangeMap } from './source-map/source-map-serializer.js';
 // Types
 // ---------------------------------------------------------------------------
 
+// Deployment IR + helpers (companion schema; OSS Heroku server only).
+export type {
+  EnvRef,
+  DeploymentValue,
+  LlmConfig,
+  McpServerConfig,
+  ServerConfig as DeploymentServerConfig,
+  DeploymentConfig,
+  AgentDSLAuthoringWithDeployment,
+} from './types.js';
+export { deploymentConfigSchema } from './types.js';
+export {
+  resolveDeploymentValue,
+  resolveLlmConfig,
+  walkEnvRefs,
+} from './deployment/resolve.js';
+export type { EnvSource, ResolvedLlmConfig } from './deployment/resolve.js';
+
 export type {
   AgentDSLAuthoring,
   GlobalAgentConfiguration,

@@ -172,7 +172,7 @@ topic main:
   actions:
     lookup:
       description: "Lookup"
-      target: "mcp://server/tool"
+      target: "totallyfake://server/tool"
   reasoning:
     instructions: ->
       |Do it
@@ -181,8 +181,25 @@ topic main:
     const errors = diagnostics.filter(d => d.code === 'invalid-action-target');
     expect(errors).toHaveLength(1);
     expect(errors[0].severity).toBe(DiagnosticSeverity.Error);
-    expect(errors[0].message).toContain('mcp://');
+    expect(errors[0].message).toContain('totallyfake://');
     expect(errors[0].message).toContain('Supported schemes');
+  });
+
+  it('allows mcp:// target', () => {
+    const diagnostics = runSecurityLint(`
+topic main:
+  label: "Main"
+  actions:
+    use_mcp_tool:
+      description: "Use MCP Tool"
+      target: "mcp://server/tool"
+  reasoning:
+    instructions: ->
+      |Do it
+`);
+
+    const errors = diagnostics.filter(d => d.code === 'invalid-action-target');
+    expect(errors).toHaveLength(0);
   });
 
   it('reports error for target without URI scheme', () => {
@@ -292,7 +309,7 @@ topic main:
     expect(errors).toHaveLength(0);
   });
 
-  it('allows mcpTool:// target', () => {
+  it('allows mcpTool:// but warns it is deprecated', () => {
     const diagnostics = runSecurityLint(`
 topic main:
   label: "Main"
@@ -307,6 +324,13 @@ topic main:
 
     const errors = diagnostics.filter(d => d.code === 'invalid-action-target');
     expect(errors).toHaveLength(0);
+
+    const deprecations = diagnostics.filter(
+      d => d.code === 'deprecated-action-target'
+    );
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0].severity).toBe(DiagnosticSeverity.Warning);
+    expect(deprecations[0].message).toContain('mcp://');
   });
 
   it('allows retriever:// target', () => {

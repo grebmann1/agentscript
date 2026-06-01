@@ -26,6 +26,9 @@ export type { FnHandler } from './tools/fn-adapter.js';
 export { HttpAdapter } from './tools/http-adapter.js';
 export type { HttpAdapterOptions } from './tools/http-adapter.js';
 export { MockToolAdapter } from './tools/mock-adapter.js';
+export { McpAdapter, parseMcpTarget } from './tools/mcp-adapter.js';
+export type { McpServerSettings, McpToolDef } from './tools/mcp-types.js';
+export { MCP_DEFAULT_TIMEOUT_MS } from './tools/mcp-types.js';
 
 export type {
   LlmDriver,

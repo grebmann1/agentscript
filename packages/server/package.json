@@ -1,0 +1,98 @@
+{
+  "name": "@agentscript/server",
+  "version": "0.1.1",
+  "description": "AgentScript server with REST, SSE, and WebSocket sessions.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": {
+        "types": "./src/index.ts",
+        "import": "./src/index.ts"
+      },
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "development": {
+        "types": "./src/node.ts",
+        "import": "./src/node.ts"
+      },
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
+    "./app": {
+      "development": {
+        "types": "./src/app.ts",
+        "import": "./src/app.ts"
+      },
+      "types": "./dist/app.d.ts",
+      "import": "./dist/app.js"
+    },
+    "./agents": {
+      "development": {
+        "types": "./src/agents.ts",
+        "import": "./src/agents.ts"
+      },
+      "types": "./dist/agents.d.ts",
+      "import": "./dist/agents.js"
+    },
+    "./sessions": {
+      "development": {
+        "types": "./src/sessions.ts",
+        "import": "./src/sessions.ts"
+      },
+      "types": "./dist/sessions.d.ts",
+      "import": "./dist/sessions.js"
+    },
+    "./runtime-policy": {
+      "development": {
+        "types": "./src/runtime-policy.ts",
+        "import": "./src/runtime-policy.ts"
+      },
+      "types": "./dist/runtime-policy.d.ts",
+      "import": "./dist/runtime-policy.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "agents"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "pnpm build && node scripts/smoke-agent-api.mjs",
+    "smoke:real": "pnpm build && node --env-file=../../.env scripts/smoke-real-agent-api.mjs",
+    "example:local": "pnpm build && pnpm --dir examples start",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@agentscript/compiler": "workspace:*",
+    "@agentscript/runtime": "workspace:*",
+    "@agentscript/runtime-vercel": "workspace:*",
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/google": "^2.0.0",
+    "@ai-sdk/openai": "^2.0.0",
+    "@hono/node-server": "^1.19.6",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^5.0.0",
+    "hono": "^4.10.4",
+    "pg": "^8.16.3",
+    "ws": "^8.18.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/pg": "^8.15.5",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
+  },
+  "license": "Apache-2.0"
+}

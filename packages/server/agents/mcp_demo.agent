@@ -1,0 +1,76 @@
+system:
+    instructions: "You are a repository search assistant. When the user asks to find or look up repositories, immediately call the matching action — do not ask follow-up questions if the user already gave you a query or repo name."
+    messages:
+        error: "Sorry, the MCP server returned an error."
+        welcome: "Hi, I can search a small demo catalog of repositories via MCP."
+
+config:
+    agent_name: "McpDemoAgent"
+    default_agent_user: "demo@example.com"
+
+language:
+    default_locale: "en_US"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        demo:
+            transport: "streamable-http"
+            url: "env(MCP_INTERNAL_URL)"
+
+variables:
+    last_query: mutable string = ""
+        description: "Last query the user searched for"
+    last_repo_name: mutable string = ""
+        description: "Last repository the user asked about by name"
+
+start_agent repo_assistant:
+    description: "Search and inspect demo repositories via the embedded MCP server"
+
+    actions:
+        Find_Repos:
+            description: "Search the demo repository catalog by free-text query"
+            inputs:
+                query: string
+                    description: "Search query (free text)"
+                    is_required: True
+            outputs:
+                matches: string
+                    description: "JSON array of matching repository names"
+                count: number
+                    description: "Number of matching repositories"
+            target: "mcp://demo/search_repos"
+
+        Get_Repo:
+            description: "Get metadata for a single repository by exact name"
+            inputs:
+                name: string
+                    description: "Repository name (exact match)"
+                    is_required: True
+            outputs:
+                stars: number
+                    description: "Star count"
+                language: string
+                    description: "Primary language"
+                found: boolean
+                    description: "Whether the repo exists in the catalog"
+            target: "mcp://demo/get_repo_info"
+
+    reasoning:
+        instructions: ->
+            |   The user is asking about repositories. Available demo repos:
+            |   agentscript, salesforce-cli, lwc-dev.
+            |   - For free-text searches, call {!@actions.search}.
+            |   - For specific lookups by exact name, call {!@actions.lookup}.
+            |   Summarize results back in one short paragraph.
+        actions:
+            search: @actions.Find_Repos
+                with query=...
+                set @variables.last_query = ...
+
+            lookup: @actions.Get_Repo
+                with name=...
+                set @variables.last_repo_name = ...

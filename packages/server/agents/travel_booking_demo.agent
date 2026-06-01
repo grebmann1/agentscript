@@ -1,0 +1,96 @@
+system:
+    instructions: "You are a concise and friendly travel booking assistant."
+    messages:
+        error: "Sorry, something went wrong while checking travel prices."
+        welcome: "Hi, I can estimate hotel and flight prices for London or San Francisco."
+
+config:
+    agent_name: "TravelBookingDemoAgent"
+    default_agent_user: "travel@example.com"
+
+language:
+    default_locale: "en_US"
+
+variables:
+    destination: mutable string = ""
+        description: "Destination city chosen by the user"
+    wants_price: mutable boolean = False
+        description: "Whether the user asked for pricing"
+    hotel_price_usd: mutable number = 0
+        description: "Hotel price in USD"
+    plane_price_usd: mutable number = 0
+        description: "Flight price in USD"
+    prices_ready: mutable boolean = False
+        description: "Whether both prices have been loaded"
+
+start_agent trip_planner:
+    description: "Collect destination first, then provide hotel and flight prices"
+
+    actions:
+        Get_Hotel_Price:
+            description: "Get the hotel price for a destination"
+            inputs:
+                destination: string
+                    description: "Destination city"
+                    is_required: True
+            outputs:
+                destination: string
+                    description: "Normalized destination"
+                hotel_price_usd: number
+                    description: "Hotel price in USD"
+            target: "fn://get_hotel_price"
+
+        Get_Plane_Price:
+            description: "Get the flight price for a destination"
+            inputs:
+                destination: string
+                    description: "Destination city"
+                    is_required: True
+            outputs:
+                destination: string
+                    description: "Normalized destination"
+                plane_price_usd: number
+                    description: "Plane ticket price in USD"
+            target: "fn://get_plane_price"
+
+    before_reasoning:
+        if @variables.destination != "" and @variables.wants_price == True and @variables.prices_ready == False:
+            run @actions.Get_Hotel_Price
+                with destination=@variables.destination
+                set @variables.hotel_price_usd = @outputs.hotel_price_usd
+
+            run @actions.Get_Plane_Price
+                with destination=@variables.destination
+                set @variables.plane_price_usd = @outputs.plane_price_usd
+                set @variables.prices_ready = True
+
+    reasoning:
+        instructions: ->
+            | First, ask the user to choose a destination if missing.
+            | Supported destinations are London and San Francisco.
+            | Only after destination is set and the user asks for price, call both actions and provide:
+            | - hotel price
+            | - flight price
+            | - total in USD
+            |
+            | Current state:
+            | - destination: {! @variables.destination }
+            | - wants_price: {! @variables.wants_price }
+            | - hotel_price_usd: {! @variables.hotel_price_usd }
+            | - plane_price_usd: {! @variables.plane_price_usd }
+            |
+            | When sharing prices, format clearly with short markdown bullets.
+        actions:
+            capture_trip_intent: @utils.setVariables
+                description: "Capture destination and whether user asked for pricing"
+                with destination=@variables.destination
+                with wants_price=@variables.wants_price
+
+            load_hotel_price: @actions.Get_Hotel_Price
+                with destination=@variables.destination
+                set @variables.hotel_price_usd = @outputs.hotel_price_usd
+
+            load_plane_price: @actions.Get_Plane_Price
+                with destination=@variables.destination
+                set @variables.plane_price_usd = @outputs.plane_price_usd
+                set @variables.prices_ready = True

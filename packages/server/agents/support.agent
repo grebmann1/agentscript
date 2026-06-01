@@ -1,0 +1,19 @@
+system:
+    instructions: "You are a concise support assistant."
+    messages:
+        error: "Sorry, something went wrong."
+        welcome: "Hi, I can help with support questions."
+
+config:
+    agent_name: "SupportAgent"
+    default_agent_user: "support@example.com"
+
+language:
+    default_locale: "en_US"
+
+start_agent support:
+    description: "Basic support assistant"
+
+    reasoning:
+        instructions: ->
+            | Help the user and be concise.
