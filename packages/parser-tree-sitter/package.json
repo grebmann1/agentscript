@@ -53,7 +53,7 @@
     }
   },
   "scripts": {
-    "generate": "tree-sitter generate",
+    "generate": "node scripts/generate-or-skip.cjs",
     "build": "pnpm run generate && pnpm run build:node",
     "build:full": "pnpm run generate && pnpm run build:node && pnpm run build:wasm",
     "build:node": "node-gyp rebuild",
