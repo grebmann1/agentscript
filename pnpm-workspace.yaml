@@ -3,6 +3,11 @@ packages:
   - 'packages/server/examples'
   - 'dialect/*'
   - 'apps/*'
+  # apps/demo is a Heroku deploy artifact (vendored tarballs assembled at
+  # deploy time by apps/demo/scripts/deploy.sh). It must NOT be installed as
+  # a workspace package — its file:vendor/*.tgz refs only resolve inside the
+  # .deploy/ worktree the script builds, not in the source tree.
+  - '!apps/demo'
 
 # Required for parser (native bindings)
 onlyBuiltDependencies:
