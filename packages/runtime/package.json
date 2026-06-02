@@ -33,8 +33,11 @@
   },
   "devDependencies": {
     "@agentscript/agentforce": "workspace:*",
+    "@hono/node-server": "^1.19.6",
+    "hono": "^4.10.4",
     "typescript": "^5.8.3",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "zod": "^4.3.6"
   },
   "keywords": [
     "agentscript",

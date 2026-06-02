@@ -455,6 +455,25 @@ importers:
         specifier: ^0.25.10
         version: 0.25.10
 
+  packages/cli:
+    dependencies:
+      '@agentscript/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      '@agentscript/runtime-vercel':
+        specifier: workspace:*
+        version: link:../runtime-vercel
+    devDependencies:
+      '@types/node':
+        specifier: ^20.19.37
+        version: 20.19.37
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@20.19.37)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+
   packages/compiler:
     dependencies:
       '@agentscript/agentforce-dialect':
@@ -683,12 +702,21 @@ importers:
       '@agentscript/agentforce':
         specifier: workspace:*
         version: link:../agentforce
+      '@hono/node-server':
+        specifier: ^1.19.6
+        version: 1.19.14(hono@4.12.23)
+      hono:
+        specifier: ^4.10.4
+        version: 4.12.23
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   packages/runtime-vercel:
     dependencies:

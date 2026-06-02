@@ -13,6 +13,14 @@ import {
 import { McpAdapter, type McpServerSettings } from '@agentscript/runtime';
 
 /**
+ * Transports we currently implement. The dialect schema accepts a wider set
+ * (`stdio`, `sse`) so older `.agent` files still parse, but the runtime only
+ * speaks streamable HTTP today — anything else must be rejected at config
+ * resolution time so users see the error on boot, not at first invocation.
+ */
+const SUPPORTED_TRANSPORTS = new Set(['http', 'streamable-http']);
+
+/**
  * Resolve a parsed `deployment.mcp` map into runtime adapter settings (env-refs
  * applied), then build a single multi-server `McpAdapter`.
  */
@@ -22,6 +30,15 @@ export function createMcpAdapter(
 ): McpAdapter {
   const resolved: Record<string, McpServerSettings> = {};
   for (const [name, server] of Object.entries(servers)) {
+    if (
+      server.transport !== undefined &&
+      !SUPPORTED_TRANSPORTS.has(server.transport)
+    ) {
+      throw new Error(
+        `deployment.mcp.${name}.transport "${server.transport}" is not supported yet. ` +
+          `Only "http" and "streamable-http" are implemented.`
+      );
+    }
     const url = resolveDeploymentValue(
       server.url,
       env,
@@ -41,7 +58,12 @@ function resolveHeaders(
   name: string,
   env: EnvSource
 ): Record<string, string> | undefined {
+  // Header names are case-insensitive on the wire, so we normalize to lowercase
+  // throughout and let last-write-win on the lowercase key. This also means an
+  // `auth` block always overrides any literal `Authorization` header the user
+  // supplied — `auth` is appended after, so it wins. Documented contract.
   const out: Record<string, string> = {};
+  const seenLower = new Map<string, string>(); // lower -> original (for warnings)
   if (server.headers) {
     for (const [key, value] of Object.entries(server.headers)) {
       const resolved = resolveDeploymentValue(
@@ -49,12 +71,33 @@ function resolveHeaders(
         env,
         `deployment.mcp.${name}.headers.${key}`
       );
-      if (resolved !== undefined) out[key] = resolved;
+      if (resolved === undefined) continue;
+      const lower = key.toLowerCase();
+      const previous = seenLower.get(lower);
+      if (previous !== undefined && previous !== key) {
+        // Same logical header supplied twice with different casings. Don't
+        // error — just keep the last one and warn so misconfigurations are
+        // visible without breaking deploys.
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            event: 'mcp_header_casing_collision',
+            server: name,
+            header: lower,
+            previousCasing: previous,
+            newCasing: key,
+          })
+        );
+      }
+      seenLower.set(lower, key);
+      out[lower] = resolved;
     }
   }
   if (server.auth && server.auth.strategy !== 'none') {
     // Both `api_key` and `bearer` strategies emit `Authorization: Bearer …` —
     // the wire format is identical; the strategy name is just an authoring hint.
+    // The `auth` block is applied AFTER explicit headers so it always wins on
+    // the lowercase `authorization` key (documented behavior, pinned by tests).
     const key = resolveDeploymentValue(
       server.auth.key,
       env,

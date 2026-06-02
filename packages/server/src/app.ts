@@ -15,7 +15,7 @@ import {
 } from './middleware.js';
 import { RuntimePolicy } from './runtime-policy.js';
 
-const DEMO_AGENT_ID = 'travel_booking_demo';
+const DEMO_AGENT_ID = process.env.DEMO_AGENT_ID ?? 'travel_booking_demo';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -88,6 +88,12 @@ export function createApp({
   // Embedded MCP server — exposes a tiny demo MCP service at /mcp so
   // agents declared with `deployment.mcp` and `mcp://` action targets can
   // round-trip end-to-end without a separate process. Stateless mode.
+  //
+  // DEMO-ONLY — do not deploy as a production MCP endpoint without
+  // front-fronting auth. The security middleware classifies /mcp as a public
+  // demo route (auth bypassed, demo rate-limit cap applied) so OSS users can
+  // try it without configuring tokens. Production MCP traffic should hit a
+  // separately-deployed MCP server with its own auth posture.
   app.route('/mcp', createEmbeddedMcpRouter());
   app.post('/demo/agent/session', async c => {
     try {

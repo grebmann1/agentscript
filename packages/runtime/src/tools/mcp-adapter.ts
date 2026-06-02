@@ -16,6 +16,9 @@ import {
 
 const CLIENT_INFO = { name: 'agentscript', version: '0.1.0' } as const;
 
+/** Safety belt: refuse to follow more than this many `nextCursor` pages. */
+const MAX_LIST_TOOLS_PAGES = 50;
+
 /**
  * Multi-server MCP adapter — wraps the official `@modelcontextprotocol/sdk`
  * `Client` for each registered server. Registered against the `mcp://` scheme,
@@ -73,6 +76,14 @@ export class McpAdapter implements ToolAdapter {
   }
 }
 
+/**
+ * Parse an `mcp://<server>/<tool>` target.
+ *
+ * Note: server names cannot contain `/` (we split on the first `/`). Tool
+ * names may be percent-encoded; `%2F` is allowed (it decodes to `/`) and the
+ * `..` traversal check is performed AFTER percent-decoding, so encoded
+ * traversal attempts (`%2e%2e/`) are also rejected.
+ */
 export function parseMcpTarget(target: string): {
   server: string;
   tool: string;
@@ -81,6 +92,7 @@ export function parseMcpTarget(target: string): {
     throw new Error(`Invalid MCP target: ${target}`);
   }
   const rest = target.slice('mcp://'.length);
+  // Split on first '/' — server names cannot contain '/'.
   const slash = rest.indexOf('/');
   if (slash <= 0 || slash === rest.length - 1) {
     throw new Error(
@@ -88,7 +100,13 @@ export function parseMcpTarget(target: string): {
     );
   }
   const server = rest.slice(0, slash);
-  const tool = rest.slice(slash + 1);
+  const rawTool = rest.slice(slash + 1);
+  let tool: string;
+  try {
+    tool = decodeURIComponent(rawTool);
+  } catch {
+    throw new Error(`Invalid MCP tool name (malformed escape): ${rawTool}`);
+  }
   if (tool.includes('..')) {
     throw new Error(`Invalid MCP tool name: ${tool}`);
   }
@@ -125,41 +143,105 @@ class McpConnection {
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
     const client = await this.connect();
-    const result = await client.callTool(
-      { name: toolName, arguments: args },
-      undefined,
-      { signal: signal ?? AbortSignal.timeout(this.timeoutMs) }
-    );
+    let result: Awaited<ReturnType<Client['callTool']>>;
+    try {
+      result = await client.callTool(
+        { name: toolName, arguments: args },
+        undefined,
+        {
+          signal: composeSignal(signal, this.timeoutMs),
+        }
+      );
+    } catch (err) {
+      // A throw from `callTool` is a transport-level failure (server reset,
+      // closed socket, abort). A tool that returns `isError: true` does NOT
+      // throw — that path lives below. Drop the cached client so the next
+      // invocation reconnects.
+      this.invalidate();
+      throw err;
+    }
 
     if (result.isError) {
-      const text = extractText(result.content);
+      const text = joinTextParts(result.content);
       throw new Error(
         `MCP server "${this.serverName}" tool "${toolName}" reported an error: ${text || 'unknown error'}`
       );
     }
 
-    const text = extractText(result.content);
-    if (text !== undefined) {
+    // Priority 1: typed structured content (MCP 2025-03 spec).
+    if (
+      result.structuredContent &&
+      typeof result.structuredContent === 'object'
+    ) {
+      return result.structuredContent as Record<string, unknown>;
+    }
+
+    const content = Array.isArray(result.content) ? result.content : [];
+    const textParts = content.filter(
+      (p): p is { type: 'text'; text: string } =>
+        !!p &&
+        typeof p === 'object' &&
+        (p as { type?: unknown }).type === 'text' &&
+        typeof (p as { text?: unknown }).text === 'string'
+    );
+
+    // Priority 2: exactly one text part that parses as JSON.
+    if (textParts.length === 1) {
       try {
-        return JSON.parse(text) as Record<string, unknown>;
+        const parsed = JSON.parse(textParts[0].text);
+        if (parsed !== null && typeof parsed === 'object') {
+          return parsed as Record<string, unknown>;
+        }
+        // Primitive JSON (string/number/bool/null) — fall through to text path.
       } catch {
-        return { text };
+        // Not JSON — fall through.
       }
     }
-    // Fallback: pass the raw result through (callers can inspect content).
-    return result as unknown as Record<string, unknown>;
+
+    // Priority 3: any text parts → joined `text` plus original content.
+    if (textParts.length > 0) {
+      const joined = textParts.map(p => p.text).join('\n');
+      return { text: joined, content: result.content };
+    }
+
+    // Priority 4: no text parts (images, resource_links, embedded resources).
+    return { content: result.content };
   }
 
   async listTools(signal?: AbortSignal): Promise<McpToolDef[]> {
     const client = await this.connect();
-    const result = await client.listTools(undefined, {
-      signal: signal ?? AbortSignal.timeout(this.timeoutMs),
-    });
-    return result.tools.map(t => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema as Record<string, unknown> | undefined,
-    }));
+    const tools: McpToolDef[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+
+    do {
+      let page: Awaited<ReturnType<Client['listTools']>>;
+      try {
+        page = await client.listTools(
+          cursor === undefined ? undefined : { cursor },
+          { signal: composeSignal(signal, this.timeoutMs) }
+        );
+      } catch (err) {
+        this.invalidate();
+        throw err;
+      }
+      for (const t of page.tools) {
+        tools.push({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema as Record<string, unknown> | undefined,
+        });
+      }
+      cursor = page.nextCursor;
+      pages++;
+      if (pages > MAX_LIST_TOOLS_PAGES) {
+        throw new Error(
+          `MCP server "${this.serverName}" listTools exceeded ${MAX_LIST_TOOLS_PAGES} pages`
+        );
+      }
+    } while (cursor !== undefined);
+
+    return tools;
   }
 
   async close(): Promise<void> {
@@ -167,6 +249,21 @@ class McpConnection {
     const client = await this.connectPromise.catch(() => null);
     this.connectPromise = null;
     if (client) await client.close();
+  }
+
+  /**
+   * Tear down a (presumed-broken) cached client and clear the connect
+   * promise so the next call reconnects. Safe to call concurrently.
+   */
+  private invalidate(): void {
+    const pending = this.connectPromise;
+    this.connectPromise = null;
+    if (pending) {
+      void pending.then(
+        client => client.close().catch(() => {}),
+        () => {}
+      );
+    }
   }
 
   private connect(): Promise<Client> {
@@ -189,8 +286,26 @@ class McpConnection {
   }
 }
 
-function extractText(content: unknown): string | undefined {
+/**
+ * Compose an optional user signal with a per-call timeout signal so EITHER
+ * one can cancel the request. Node 20+ provides `AbortSignal.any` natively.
+ */
+function composeSignal(
+  userSignal: AbortSignal | undefined,
+  timeoutMs: number
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!userSignal) return timeout;
+  return AbortSignal.any([userSignal, timeout]);
+}
+
+/**
+ * Concatenate every `type === 'text'` content part with newlines. Returns
+ * `undefined` when there are none. Used by the error-message extractor.
+ */
+function joinTextParts(content: unknown): string | undefined {
   if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
   for (const part of content) {
     if (
       part &&
@@ -198,8 +313,8 @@ function extractText(content: unknown): string | undefined {
       (part as { type?: unknown }).type === 'text' &&
       typeof (part as { text?: unknown }).text === 'string'
     ) {
-      return (part as { text: string }).text;
+      parts.push((part as { text: string }).text);
     }
   }
-  return undefined;
+  return parts.length === 0 ? undefined : parts.join('\n');
 }

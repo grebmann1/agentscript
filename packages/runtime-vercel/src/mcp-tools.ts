@@ -3,13 +3,36 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { createHash } from 'node:crypto';
 import type { McpAdapter } from '@agentscript/runtime';
 
 /**
  * Convert every tool exposed by the registered MCP servers into a Vercel AI
- * SDK `ToolSet`, keyed as `<server>__<tool>`. Each tool's `execute()` routes
- * back through the same {@link McpAdapter}, so credentials and the underlying
- * MCP transport are reused — no separate connection is opened per tool.
+ * SDK `ToolSet`. Each tool's `execute()` routes back through the same
+ * {@link McpAdapter}, so credentials and the underlying MCP transport are
+ * reused — no separate connection is opened per tool.
+ *
+ * ## Keying scheme
+ *
+ * The map key is `${server}__${tool}` whenever both segments only contain
+ * `[A-Za-z0-9_-]` (the conservative subset some Vercel AI SDK providers
+ * enforce, capped at 64 chars). Otherwise each segment is sanitized by
+ * replacing every disallowed character with `_`, and a 6-char SHA-256 suffix
+ * derived from the original `server::tool` string is appended so distinct
+ * MCP names can never collide after sanitization. Example:
+ *
+ *   server `slack-bot`, tool `send/dm` → `slack-bot__send_dm__a1b2c3`
+ *
+ * If two distinct (server, tool) pairs would still produce the same key
+ * (e.g. via `__` already in either side), construction throws — surfacing
+ * the collision loudly is safer than silently shadowing one tool with
+ * another.
+ *
+ * ## Routing
+ *
+ * The wire `target` URL is `mcp://<server>/<tool>` with each segment
+ * percent-encoded via `encodeURIComponent`, so slashes, `%`, and spaces
+ * round-trip through the runtime adapter's percent-decoding parser.
  *
  * Designed for use inside `runtime-vercel`'s driver, but exposed publicly so
  * callers can hand the resulting tools directly to `streamText` /
@@ -24,14 +47,26 @@ export async function mcpToolsForVercel(
   factory: VercelToolFactories
 ): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
+  // Track which (server, tool) pair claimed each key so we can throw on a
+  // genuine collision instead of silently overwriting.
+  const keyOwner = new Map<string, { server: string; tool: string }>();
   for (const server of adapter.servers()) {
     const defs = await adapter.listTools(server);
     for (const def of defs) {
-      const toolName = `${server}__${def.name}`;
+      const toolName = buildToolKey(server, def.name);
+      const prior = keyOwner.get(toolName);
+      if (prior && (prior.server !== server || prior.tool !== def.name)) {
+        throw new Error(
+          `mcpToolsForVercel: tool key collision on "${toolName}" between ` +
+            `(${prior.server}, ${prior.tool}) and (${server}, ${def.name})`
+        );
+      }
+      keyOwner.set(toolName, { server, tool: def.name });
       const inputSchema =
         def.inputSchema && factory.jsonSchema
           ? factory.jsonSchema(def.inputSchema)
           : (def.inputSchema ?? { type: 'object' });
+      const target = `mcp://${encodeURIComponent(server)}/${encodeURIComponent(def.name)}`;
       out[toolName] = factory.tool({
         description: def.description ?? `MCP tool ${def.name} on ${server}`,
         inputSchema,
@@ -40,7 +75,7 @@ export async function mcpToolsForVercel(
           opts?: { signal?: AbortSignal }
         ) =>
           adapter.invoke({
-            target: `mcp://${server}/${def.name}`,
+            target,
             args,
             signal: opts?.signal,
           }),
@@ -48,6 +83,25 @@ export async function mcpToolsForVercel(
     }
   }
   return out;
+}
+
+/**
+ * Build the Vercel ToolSet key for a `(server, tool)` pair using the scheme
+ * documented on {@link mcpToolsForVercel}. Exported only via the module's
+ * public surface implicitly through `mcpToolsForVercel`'s behavior; kept
+ * private here since callers should not depend on the exact format.
+ */
+function buildToolKey(server: string, tool: string): string {
+  const safe = /^[A-Za-z0-9_-]+$/;
+  if (safe.test(server) && safe.test(tool)) {
+    return `${server}__${tool}`;
+  }
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '_');
+  const hash = createHash('sha256')
+    .update(`${server}::${tool}`)
+    .digest('hex')
+    .slice(0, 6);
+  return `${sanitize(server)}__${sanitize(tool)}__${hash}`;
 }
 
 /**

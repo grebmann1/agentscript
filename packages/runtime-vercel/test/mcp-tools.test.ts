@@ -4,6 +4,7 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { McpAdapter } from '@agentscript/runtime';
 import { mcpToolsForVercel } from '../src/mcp-tools.js';
@@ -193,5 +194,153 @@ describe('mcpToolsForVercel', () => {
     const first = builtTools[0];
     // Without jsonSchema(), the raw MCP schema flows through verbatim.
     expect(first.inputSchema).toMatchObject({ type: 'object' });
+  });
+
+  it('execute() propagates server errors to the LLM driver', async () => {
+    // The Vercel SDK relies on `execute()` rejecting so it can surface tool
+    // errors back to the model. Bypass the registry by invoking a tool the
+    // mock doesn't expose — the mock returns a JSON-RPC error response.
+    const { factory } = makeFactory();
+    await mcpToolsForVercel(adapter, factory);
+
+    await expect(
+      adapter.invoke({ target: 'mcp://demo/missing_tool', args: {} })
+    ).rejects.toThrow(/missing_tool|unknown/i);
+  });
+
+  it('execute() forwards an aborted signal to the underlying adapter', async () => {
+    const { factory, builtTools } = makeFactory();
+    await mcpToolsForVercel(adapter, factory);
+
+    const greet = builtTools.find(t => t.description.includes('greet'));
+    expect(greet).toBeDefined();
+
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(
+      greet!.execute({ name: 'agentscript' }, { signal: ctrl.signal })
+    ).rejects.toThrow();
+  });
+
+  it('returns an empty ToolSet when no servers are registered', async () => {
+    const empty = new McpAdapter({});
+    const { factory, builtTools } = makeFactory();
+    const tools = await mcpToolsForVercel(empty, factory);
+    expect(tools).toEqual({});
+    expect(builtTools).toHaveLength(0);
+    await empty.close();
+  });
+
+  it('produces unchanged `<server>__<tool>` keys for alphanumeric names', async () => {
+    // Happy path: ASCII-safe server + tool names round-trip verbatim, no
+    // sanitization or hash suffix is appended.
+    const { factory } = makeFactory();
+    const tools = await mcpToolsForVercel(adapter, factory);
+    expect(Object.keys(tools).sort()).toEqual(['demo__add', 'demo__greet']);
+  });
+});
+
+/**
+ * The remaining cases drive `mcpToolsForVercel` against a hand-rolled fake
+ * adapter so we can fabricate MCP names that the real SDK transport would
+ * reject (e.g. tool names containing `/`). The fake satisfies the surface
+ * `mcpToolsForVercel` actually consumes.
+ */
+interface InvokeCall {
+  target: string;
+  args: Record<string, unknown>;
+}
+interface FakeToolDef {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+function fakeAdapter(
+  layout: Record<string, FakeToolDef[]>,
+  invokeCalls: InvokeCall[]
+): import('@agentscript/runtime').McpAdapter {
+  return {
+    servers: () => Object.keys(layout),
+    listTools: async (server: string) => layout[server] ?? [],
+    invoke: async (req: { target: string; args: Record<string, unknown> }) => {
+      invokeCalls.push({ target: req.target, args: req.args });
+      return { ok: true };
+    },
+    // Methods the function under test does not call — left undefined behind
+    // a cast so we don't have to mirror the full McpAdapter surface.
+  } as unknown as import('@agentscript/runtime').McpAdapter;
+}
+
+describe('mcpToolsForVercel — name safety', () => {
+  it('encodes `/` (and other unsafe chars) in the wire target and sanitizes the key', async () => {
+    const invokeCalls: InvokeCall[] = [];
+    const adapter = fakeAdapter(
+      { demo: [{ name: 'send/dm', description: 'send a DM' }] },
+      invokeCalls
+    );
+    const { factory, builtTools } = makeFactory();
+
+    const tools = await mcpToolsForVercel(adapter, factory);
+
+    // Key: sanitized `send_dm` plus 6-char SHA-256 suffix from `demo::send/dm`.
+    const expectedHash = createHash('sha256')
+      .update('demo::send/dm')
+      .digest('hex')
+      .slice(0, 6);
+    const expectedKey = `demo__send_dm__${expectedHash}`;
+    expect(Object.keys(tools)).toEqual([expectedKey]);
+    // Vercel-style ASCII-safe key: only [A-Za-z0-9_-].
+    expect(expectedKey).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    // execute() routes through a percent-encoded target so the runtime parser
+    // can decode the original tool name (slashes round-trip via `%2F`).
+    await builtTools[0]!.execute({ to: 'alice' });
+    expect(invokeCalls).toHaveLength(1);
+    expect(invokeCalls[0]!.target).toBe('mcp://demo/send%2Fdm');
+    expect(decodeURIComponent('send%2Fdm')).toBe('send/dm');
+  });
+
+  it('throws on a real key collision listing both offending pairs', async () => {
+    // Both pairs sanitize-and-concat to `a__b__c`, so construction must
+    // surface the collision rather than silently shadow one tool.
+    const invokeCalls: InvokeCall[] = [];
+    const adapter = fakeAdapter(
+      {
+        a__b: [{ name: 'c' }],
+        a: [{ name: 'b__c' }],
+      },
+      invokeCalls
+    );
+    const { factory } = makeFactory();
+
+    await expect(mcpToolsForVercel(adapter, factory)).rejects.toThrow(
+      /collision.*a__b.*c|collision.*a.*b__c/i
+    );
+  });
+
+  it('avoids collisions between distinct sanitization inputs via the hash suffix', async () => {
+    // `send/dm` and `send_dm` would collide under naive sanitization, but the
+    // hash suffix is derived from the original name, so the keys diverge.
+    const invokeCalls: InvokeCall[] = [];
+    const adapter = fakeAdapter(
+      {
+        slack: [{ name: 'send/dm' }, { name: 'send_dm' }],
+      },
+      invokeCalls
+    );
+    const { factory } = makeFactory();
+
+    const tools = await mcpToolsForVercel(adapter, factory);
+    const keys = Object.keys(tools);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    // `send_dm` is fully ASCII-safe → no hash suffix.
+    expect(keys).toContain('slack__send_dm');
+    // `send/dm` → sanitized + hash.
+    const slashHash = createHash('sha256')
+      .update('slack::send/dm')
+      .digest('hex')
+      .slice(0, 6);
+    expect(keys).toContain(`slack__send_dm__${slashHash}`);
   });
 });

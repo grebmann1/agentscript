@@ -11,6 +11,8 @@ export interface MiddlewareConfig {
 
 const rateLimitMap = new Map<string, { count: number; resetAtMs: number }>();
 const DEMO_ROUTE_PREFIX = '/demo/agent/';
+const MCP_ROUTE_PREFIX = '/mcp/';
+const MCP_ROUTE_EXACT = '/mcp';
 const DEMO_RATE_LIMIT_CAP = 20;
 
 export function requestContextMiddleware(): MiddlewareHandler {
@@ -48,6 +50,7 @@ export function securityMiddleware(
   return async (c, next) => {
     const pathname = new URL(c.req.url).pathname;
     const demoRoute = isPublicDemoRoute(pathname);
+    const mcpRoute = isMcpRoute(pathname);
     applyCors(c, config.corsAllowedOrigins);
     if (c.req.method === 'OPTIONS') {
       return c.body(null, 204);
@@ -71,9 +74,24 @@ export function securityMiddleware(
         413
       );
     }
-    const routeRateLimitMax = demoRoute
+    // /mcp shares the demo cap so the embedded demo MCP server can't be used
+    // as a high-throughput unauthenticated endpoint. Surface the path-class so
+    // abuse stands out in logs.
+    const isCappedDemo = demoRoute || mcpRoute;
+    const routeRateLimitMax = isCappedDemo
       ? Math.min(config.rateLimitMax, DEMO_RATE_LIMIT_CAP)
       : config.rateLimitMax;
+    if (mcpRoute) {
+      const requestId = c.get('requestId');
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          event: 'mcp_demo_request',
+          requestId,
+          path: pathname,
+        })
+      );
+    }
     if (!checkRateLimit(c, config.rateLimitWindowMs, routeRateLimitMax)) {
       return c.json(
         { errorCode: 'RATE_LIMITED', message: 'Too many requests' },
@@ -91,10 +109,19 @@ function isProtectedRoute(pathname: string): boolean {
 }
 
 function isPublicDemoRoute(pathname: string): boolean {
+  // The embedded /mcp demo server is treated as a public demo route — auth is
+  // bypassed but the demo rate-limit cap still applies. The expectation is
+  // that production MCP traffic hits a separately-deployed (auth'd) MCP
+  // server, not this in-process demo.
   return (
     pathname === DEMO_ROUTE_PREFIX.slice(0, -1) ||
-    pathname.startsWith(DEMO_ROUTE_PREFIX)
+    pathname.startsWith(DEMO_ROUTE_PREFIX) ||
+    isMcpRoute(pathname)
   );
+}
+
+function isMcpRoute(pathname: string): boolean {
+  return pathname === MCP_ROUTE_EXACT || pathname.startsWith(MCP_ROUTE_PREFIX);
 }
 
 function isAuthorized(c: Context, allowedTokens: string[]): boolean {
