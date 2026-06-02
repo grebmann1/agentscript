@@ -9,6 +9,7 @@ export interface ServerConfig {
   sessionStoreBackend: 'memory' | 'postgres';
   postgresUrl?: string;
   authTokens: string[];
+  mcpAuthTokens: string[];
   corsAllowedOrigins: string[];
   maxRequestBytes: number;
   rateLimitWindowMs: number;

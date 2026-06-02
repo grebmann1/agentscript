@@ -22,6 +22,7 @@ const baseConfig = (agentsDir: string): ServerConfig => ({
   maxSessions: 10,
   sessionStoreBackend: 'memory',
   authTokens: [],
+  mcpAuthTokens: [],
   corsAllowedOrigins: ['*'],
   maxRequestBytes: 1000,
   rateLimitWindowMs: 60_000,

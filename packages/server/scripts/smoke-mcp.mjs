@@ -5,6 +5,10 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const port = Number(process.env.PORT ?? 5430);
 const url = `http://127.0.0.1:${port}/mcp`;
+// Smoke always exercises the auth gate so a bypass regression breaks the
+// build, not the live deploy. The token is local-only (process env var
+// confined to this child).
+const mcpToken = process.env.MCP_AUTH_TOKEN ?? 'smoke-mcp-token';
 
 const server = spawn('node', ['dist/index.js'], {
   cwd: process.cwd(),
@@ -14,6 +18,7 @@ const server = spawn('node', ['dist/index.js'], {
     AGENTS_DIR: 'agents',
     OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? 'sk-smoke-not-used',
     MCP_INTERNAL_URL: url,
+    MCP_AUTH_TOKENS: mcpToken,
     NODE_ENV: 'production',
   },
   stdio: 'inherit',
@@ -28,11 +33,36 @@ const fail = msg => {
 try {
   await sleep(1500);
 
+  // Verify the auth gate first — without a bearer, /mcp must reject with 401.
+  const unauth = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'smoke', version: '0' },
+      },
+    }),
+  });
+  if (unauth.status !== 401) {
+    fail(`/mcp without bearer expected 401, got ${unauth.status}`);
+  }
+  console.log('✓ /mcp rejects unauthenticated request (401)');
+
   const client = new Client({ name: 'mcp-smoke', version: '0.0.1' });
-  const transport = new StreamableHTTPClientTransport(new URL(url));
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: { headers: { authorization: `Bearer ${mcpToken}` } },
+  });
   await client.connect(transport);
 
-  console.log('✓ connected to /mcp');
+  console.log('✓ connected to /mcp with bearer token');
 
   // tools/list — verify all three demo tools and annotations
   const list = await client.listTools();

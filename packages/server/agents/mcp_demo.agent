@@ -20,6 +20,9 @@ deployment:
         demo:
             transport: "streamable-http"
             url: "env(MCP_INTERNAL_URL)"
+            auth:
+                strategy: "bearer"
+                key: "env(MCP_INTERNAL_TOKEN)"
 
 variables:
     last_origin: mutable string = ""

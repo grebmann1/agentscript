@@ -4,16 +4,48 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const url =
   process.argv[2] ??
   'https://agentscript-runner-demo-43272b107f3c.herokuapp.com/mcp';
+const token = process.env.MCP_AUTH_TOKEN;
 
 const fail = msg => {
   console.error(`✗ ${msg}`);
   process.exit(1);
 };
 
+if (token) {
+  // Sanity-check the gate before doing anything else: an unauthed request
+  // must be rejected.
+  const probe = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'smoke', version: '0' },
+      },
+    }),
+  });
+  if (probe.status !== 401) {
+    fail(`auth gate broken: unauthed request returned ${probe.status}`);
+  }
+  console.log('✓ /mcp rejects unauthenticated request (401)');
+}
+
 const client = new Client({ name: 'mcp-smoke-remote', version: '0.0.1' });
-const transport = new StreamableHTTPClientTransport(new URL(url));
+const transport = new StreamableHTTPClientTransport(
+  new URL(url),
+  token
+    ? { requestInit: { headers: { authorization: `Bearer ${token}` } } }
+    : undefined
+);
 await client.connect(transport);
-console.log(`✓ connected to ${url}`);
+console.log(`✓ connected to ${url}${token ? ' (with bearer)' : ''}`);
 
 const list = await client.listTools();
 const byName = Object.fromEntries(list.tools.map(t => [t.name, t]));

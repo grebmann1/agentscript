@@ -39,6 +39,16 @@ export async function startServer(
   if (!process.env.MCP_INTERNAL_URL) {
     process.env.MCP_INTERNAL_URL = `http://127.0.0.1:${config.port}/mcp`;
   }
+  // The demo agent's self-loop call into /mcp resolves
+  // `auth.key = env(MCP_INTERNAL_TOKEN)`. When the operator has configured
+  // MCP_AUTH_TOKENS, expose the first one so the agent forwards it; otherwise
+  // expose a sentinel so env-resolution doesn't throw at boot. The middleware
+  // ignores the Authorization header when `mcpAuthTokens` is empty, so the
+  // sentinel is harmless in unauth mode.
+  if (!process.env.MCP_INTERNAL_TOKEN) {
+    process.env.MCP_INTERNAL_TOKEN =
+      config.mcpAuthTokens[0] ?? '_no_mcp_auth_configured';
+  }
   // Pass `undefined` so AgentRegistry picks the LLM from deployment.llm when any
   // loaded .agent file declares one, falling back to env-var ServerConfig.
   const agents = await AgentRegistry.load(config);
@@ -63,6 +73,7 @@ export async function startServer(
     ),
     middlewareConfig: {
       authTokens: config.authTokens,
+      mcpAuthTokens: config.mcpAuthTokens,
       corsAllowedOrigins: config.corsAllowedOrigins,
       maxRequestBytes: config.maxRequestBytes,
       rateLimitWindowMs: config.rateLimitWindowMs,
@@ -115,6 +126,7 @@ export function readConfig(cwd = process.cwd()): ServerConfig {
       process.env.SESSION_STORE_BACKEND === 'postgres' ? 'postgres' : 'memory',
     postgresUrl: process.env.POSTGRES_URL,
     authTokens: parseList(process.env.API_AUTH_TOKENS),
+    mcpAuthTokens: parseList(process.env.MCP_AUTH_TOKENS),
     corsAllowedOrigins: parseList(process.env.CORS_ALLOWED_ORIGINS, ['*']),
     maxRequestBytes: parsePositiveInt(process.env.MAX_REQUEST_BYTES, 1_000_000),
     rateLimitWindowMs: parsePositiveInt(

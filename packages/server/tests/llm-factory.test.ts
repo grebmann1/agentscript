@@ -24,6 +24,7 @@ const baseServerConfig: ServerConfig = {
   maxSessions: 10,
   sessionStoreBackend: 'memory',
   authTokens: [],
+  mcpAuthTokens: [],
   corsAllowedOrigins: ['*'],
   maxRequestBytes: 1000,
   rateLimitWindowMs: 60_000,

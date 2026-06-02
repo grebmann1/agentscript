@@ -13,6 +13,7 @@ describe('securityMiddleware', () => {
       '*',
       securityMiddleware({
         authTokens: ['token-1'],
+        mcpAuthTokens: [],
         corsAllowedOrigins: ['*'],
         maxRequestBytes: 1000,
         rateLimitWindowMs: 60000,
@@ -31,6 +32,7 @@ describe('securityMiddleware', () => {
       '*',
       securityMiddleware({
         authTokens: ['token-1'],
+        mcpAuthTokens: [],
         corsAllowedOrigins: ['*'],
         maxRequestBytes: 1000,
         rateLimitWindowMs: 60000,
@@ -44,16 +46,16 @@ describe('securityMiddleware', () => {
     expect(res.status).toBe(200);
   });
 
-  it('exempts /mcp from auth as a public demo route', async () => {
-    // The embedded MCP server at /mcp is demo-only. Even with authTokens
-    // configured, /mcp must be reachable without a bearer (the demo rate
-    // limit cap still applies — see other tests).
+  it('leaves /mcp publicly reachable when mcpAuthTokens is empty', async () => {
+    // Unauth mode: API tokens may gate other routes, but /mcp stays open so
+    // OSS users can try the demo without configuring tokens.
     const app = new Hono();
     app.use('*', requestContextMiddleware());
     app.use(
       '*',
       securityMiddleware({
         authTokens: ['token-1'],
+        mcpAuthTokens: [],
         corsAllowedOrigins: ['*'],
         maxRequestBytes: 1000,
         rateLimitWindowMs: 60000,
@@ -68,6 +70,79 @@ describe('securityMiddleware', () => {
     expect(sub.status).toBe(200);
   });
 
+  it('rejects /mcp without bearer when mcpAuthTokens is configured', async () => {
+    const app = new Hono();
+    app.use('*', requestContextMiddleware());
+    app.use(
+      '*',
+      securityMiddleware({
+        authTokens: [],
+        mcpAuthTokens: ['mcp-secret'],
+        corsAllowedOrigins: ['*'],
+        maxRequestBytes: 1000,
+        rateLimitWindowMs: 60000,
+        rateLimitMax: 100,
+      })
+    );
+    app.post('/mcp', c => c.json({ ok: true }));
+    const res = await app.request('http://localhost/mcp', { method: 'POST' });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.message).toMatch(/MCP bearer token/);
+  });
+
+  it('accepts /mcp with the configured MCP bearer token', async () => {
+    const app = new Hono();
+    app.use('*', requestContextMiddleware());
+    app.use(
+      '*',
+      securityMiddleware({
+        authTokens: [],
+        mcpAuthTokens: ['mcp-secret'],
+        corsAllowedOrigins: ['*'],
+        maxRequestBytes: 1000,
+        rateLimitWindowMs: 60000,
+        rateLimitMax: 100,
+      })
+    );
+    app.post('/mcp', c => c.json({ ok: true }));
+    const res = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { authorization: 'Bearer mcp-secret' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('keeps /mcp and main API tokens independent', async () => {
+    // A token valid for the main API must NOT unlock /mcp, and vice-versa.
+    const app = new Hono();
+    app.use('*', requestContextMiddleware());
+    app.use(
+      '*',
+      securityMiddleware({
+        authTokens: ['api-token'],
+        mcpAuthTokens: ['mcp-token'],
+        corsAllowedOrigins: ['*'],
+        maxRequestBytes: 1000,
+        rateLimitWindowMs: 60000,
+        rateLimitMax: 100,
+      })
+    );
+    app.post('/mcp', c => c.json({ ok: true }));
+    app.get('/protected', c => c.json({ ok: true }));
+
+    const mcpWithApi = await app.request('http://localhost/mcp', {
+      method: 'POST',
+      headers: { authorization: 'Bearer api-token' },
+    });
+    expect(mcpWithApi.status).toBe(401);
+
+    const apiWithMcp = await app.request('http://localhost/protected', {
+      headers: { authorization: 'Bearer mcp-token' },
+    });
+    expect(apiWithMcp.status).toBe(401);
+  });
+
   it('does not exempt routes that merely start with /mcp- prefix', async () => {
     // Guard against a regex/startsWith bug accidentally matching /mcpfoo.
     const app = new Hono();
@@ -76,6 +151,7 @@ describe('securityMiddleware', () => {
       '*',
       securityMiddleware({
         authTokens: ['token-1'],
+        mcpAuthTokens: [],
         corsAllowedOrigins: ['*'],
         maxRequestBytes: 1000,
         rateLimitWindowMs: 60000,

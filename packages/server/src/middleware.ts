@@ -3,6 +3,13 @@ import type { Context, MiddlewareHandler } from 'hono';
 
 export interface MiddlewareConfig {
   authTokens: string[];
+  /**
+   * Bearer tokens accepted on the embedded MCP route. When non-empty, /mcp
+   * requires `Authorization: Bearer <token>` like any other protected route.
+   * When empty, /mcp stays publicly reachable (local-dev / OSS demo mode) but
+   * the demo rate-limit cap still applies.
+   */
+  mcpAuthTokens: string[];
   corsAllowedOrigins: string[];
   maxRequestBytes: number;
   rateLimitWindowMs: number;
@@ -49,15 +56,31 @@ export function securityMiddleware(
 ): MiddlewareHandler {
   return async (c, next) => {
     const pathname = new URL(c.req.url).pathname;
-    const demoRoute = isPublicDemoRoute(pathname);
     const mcpRoute = isMcpRoute(pathname);
+    const demoNonMcp = isDemoNonMcpRoute(pathname);
     applyCors(c, config.corsAllowedOrigins);
     if (c.req.method === 'OPTIONS') {
       return c.body(null, 204);
     }
-    if (
+    if (mcpRoute) {
+      // /mcp authenticates against `mcpAuthTokens` independently of the main
+      // API tokens. When the operator has not configured any, the route stays
+      // publicly reachable (OSS demo mode); when they have, require a bearer.
+      if (
+        config.mcpAuthTokens.length > 0 &&
+        !isAuthorized(c, config.mcpAuthTokens)
+      ) {
+        return c.json(
+          {
+            errorCode: 'UNAUTHORIZED',
+            message: 'Missing or invalid MCP bearer token',
+          },
+          401
+        );
+      }
+    } else if (
       isProtectedRoute(pathname) &&
-      !demoRoute &&
+      !demoNonMcp &&
       !isAuthorized(c, config.authTokens)
     ) {
       return c.json(
@@ -77,7 +100,7 @@ export function securityMiddleware(
     // /mcp shares the demo cap so the embedded demo MCP server can't be used
     // as a high-throughput unauthenticated endpoint. Surface the path-class so
     // abuse stands out in logs.
-    const isCappedDemo = demoRoute || mcpRoute;
+    const isCappedDemo = demoNonMcp || mcpRoute;
     const routeRateLimitMax = isCappedDemo
       ? Math.min(config.rateLimitMax, DEMO_RATE_LIMIT_CAP)
       : config.rateLimitMax;
@@ -108,15 +131,13 @@ function isProtectedRoute(pathname: string): boolean {
   );
 }
 
-function isPublicDemoRoute(pathname: string): boolean {
-  // The embedded /mcp demo server is treated as a public demo route — auth is
-  // bypassed but the demo rate-limit cap still applies. The expectation is
-  // that production MCP traffic hits a separately-deployed (auth'd) MCP
-  // server, not this in-process demo.
+function isDemoNonMcpRoute(pathname: string): boolean {
+  // The non-MCP demo routes (/demo/agent/*) stay auth-bypassed for the OSS
+  // landing site. /mcp has its own gate (`mcpAuthTokens`) so it isn't lumped
+  // in here.
   return (
     pathname === DEMO_ROUTE_PREFIX.slice(0, -1) ||
-    pathname.startsWith(DEMO_ROUTE_PREFIX) ||
-    isMcpRoute(pathname)
+    pathname.startsWith(DEMO_ROUTE_PREFIX)
   );
 }
 
