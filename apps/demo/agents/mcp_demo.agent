@@ -1,0 +1,121 @@
+system:
+    instructions: "You are a friendly travel-booking assistant. Help the user search for flights, find hotels, and book trips. When the user gives you enough info to call a tool, call it immediately — don't ask redundant questions."
+    messages:
+        error: "Sorry, the booking service returned an error."
+        welcome: "Hi! I can help you plan a trip — search flights and hotels, then book them."
+
+config:
+    agent_name: "TravelBookingAgent"
+    default_agent_user: "demo@example.com"
+
+language:
+    default_locale: "en_US"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        demo:
+            transport: "streamable-http"
+            url: "env(MCP_INTERNAL_URL)"
+            auth:
+                strategy: "bearer"
+                key: "env(MCP_INTERNAL_TOKEN)"
+
+variables:
+    last_origin: mutable string = ""
+        description: "Origin city of the most recent flight search"
+    last_destination: mutable string = ""
+        description: "Destination city of the most recent flight search"
+    last_confirmation: mutable string = ""
+        description: "Confirmation number from the most recent booking"
+
+start_agent travel_assistant:
+    description: "Search and book flights and hotels via the embedded MCP server"
+
+    actions:
+        Search_Flights:
+            description: "Find flights between two cities on a given date"
+            inputs:
+                origin: string
+                    description: "Origin city (e.g. 'San Francisco')"
+                    is_required: True
+                destination: string
+                    description: "Destination city (e.g. 'New York')"
+                    is_required: True
+                depart_date: string
+                    description: "Departure date in YYYY-MM-DD format"
+                    is_required: True
+            outputs:
+                flights: string
+                    description: "JSON array of matching flights with id, airline, times, price"
+                count: number
+                    description: "Number of matching flights"
+            target: "mcp://demo/search_flights"
+
+        Search_Hotels:
+            description: "Find hotels in a city for a given date range"
+            inputs:
+                city: string
+                    description: "City to search hotels in"
+                    is_required: True
+                check_in: string
+                    description: "Check-in date (YYYY-MM-DD)"
+                    is_required: True
+                check_out: string
+                    description: "Check-out date (YYYY-MM-DD)"
+                    is_required: True
+            outputs:
+                hotels: string
+                    description: "JSON array of matching hotels with id, name, rating, price"
+                count: number
+                    description: "Number of matching hotels"
+            target: "mcp://demo/search_hotels"
+
+        Book_Trip:
+            description: "Book a flight and/or hotel for a traveler"
+            inputs:
+                traveler_name: string
+                    description: "Full name of the traveler"
+                    is_required: True
+                flight_id: string
+                    description: "Flight id from a prior Search_Flights result (e.g. 'FL-101')"
+                hotel_id: string
+                    description: "Hotel id from a prior Search_Hotels result (e.g. 'HT-NYC-1')"
+            outputs:
+                confirmation_number: string
+                    description: "Booking confirmation number"
+                total_usd: number
+                    description: "Total cost in USD"
+                booked: boolean
+                    description: "Whether the booking succeeded"
+            target: "mcp://demo/book_trip"
+
+    reasoning:
+        instructions: ->
+            |   Help the user plan a trip. Typical flow:
+            |     1. Search for flights with {!@actions.find_flights} once you have origin, destination, and date.
+            |     2. Search for hotels at the destination with {!@actions.find_hotels}.
+            |     3. Once the user picks specific flight_id and/or hotel_id, book with {!@actions.book}.
+            |   When listing options, present them as a short numbered list with id, price, and key details.
+            |   After booking, confirm the confirmation number and total cost.
+        actions:
+            find_flights: @actions.Search_Flights
+                with origin=...
+                with destination=...
+                with depart_date=...
+                set @variables.last_origin = ...
+                set @variables.last_destination = ...
+
+            find_hotels: @actions.Search_Hotels
+                with city=...
+                with check_in=...
+                with check_out=...
+
+            book: @actions.Book_Trip
+                with traveler_name=...
+                with flight_id=...
+                with hotel_id=...
+                set @variables.last_confirmation = @outputs.confirmation_number

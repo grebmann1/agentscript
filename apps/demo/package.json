@@ -1,0 +1,31 @@
+{
+  "name": "agentscript-runner-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "AGENTS_DIR=./agents node node_modules/@agentscript/server/dist/index.js"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@agentscript/server": "file:vendor/agentscript-server-0.1.5.tgz"
+  },
+  "overrides": {
+    "@agentscript/agentfabric-dialect": "file:vendor/agentscript-agentfabric-dialect-0.1.23.tgz",
+    "@agentscript/agentforce": "file:vendor/agentscript-agentforce-2.5.31.tgz",
+    "@agentscript/agentforce-dialect": "file:vendor/agentscript-agentforce-dialect-2.9.7.tgz",
+    "@agentscript/agentscript-dialect": "file:vendor/agentscript-agentscript-dialect-2.5.19.tgz",
+    "@agentscript/cli": "file:vendor/agentscript-cli-0.1.0.tgz",
+    "@agentscript/compiler": "file:vendor/agentscript-compiler-2.6.8.tgz",
+    "@agentscript/language": "file:vendor/agentscript-language-2.5.3.tgz",
+    "@agentscript/parser": "file:vendor/agentscript-parser-4.0.0.tgz",
+    "@agentscript/parser-javascript": "file:vendor/agentscript-parser-javascript-2.4.0.tgz",
+    "@agentscript/parser-tree-sitter": "file:vendor/agentscript-parser-tree-sitter-2.4.0.tgz",
+    "@agentscript/runtime": "file:vendor/agentscript-runtime-0.1.1.tgz",
+    "@agentscript/runtime-vercel": "file:vendor/agentscript-runtime-vercel-0.1.1.tgz",
+    "@agentscript/server": "file:vendor/agentscript-server-0.1.5.tgz",
+    "@agentscript/types": "file:vendor/agentscript-types-0.2.1.tgz"
+  }
+}

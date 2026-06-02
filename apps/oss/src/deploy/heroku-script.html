@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deploy via script — AgentScript OSS</title>
+    <meta name="description" content="The script-based Heroku deploy flow that powers the live AgentScript demo: pnpm pack workspace packages, vendor them as file:*.tgz, and force-push to Heroku." />
+
+    <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="../assets/styles.css" />
+
+    <meta property="og:title" content="Deploy via script — AgentScript OSS" />
+    <meta property="og:description" content="The script-based Heroku deploy flow that powers the live AgentScript demo: pnpm pack workspace packages, vendor them as file:*.tgz, and force-push to Heroku." />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container">
+        <a class="brand" href="/">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 19 L12 5 L19 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <line x1="8" y1="14.5" x2="16" y2="14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          AgentScript <span class="brand-tag">OSS</span>
+        </a>
+        <nav class="nav">
+          <a class="desktop" href="/#packages">Packages</a>
+          <a class="desktop" href="/#quickstart">Quickstart</a>
+          <a class="desktop" href="/#deploy">Deploy</a>
+          <a class="desktop" href="/docs/">Docs</a>
+          <a class="pill" href="https://github.com/salesforce/agentscript">GitHub →</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <div class="eyebrow"><span class="dot"></span> Heroku · Script-based</div>
+          <h1 class="hero-title">Heroku via deploy <em>script</em>.</h1>
+          <p class="hero-sub">
+            The same flow that powers the live demo at
+            <a href="https://agentscript-runner-demo-43272b107f3c.herokuapp.com">agentscript-runner-demo-43272b107f3c.herokuapp.com</a>.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <div class="container">
+          <p class="section-eyebrow">When to reach for it</p>
+          <h2 class="section-title">When to use this</h2>
+          <p class="section-lead">
+            Three situations call for it: the buildpack repo isn't published
+            yet, the agent ships out of a workspace monorepo, or a single
+            committed script needs to serve as the canonical deploy recipe.
+            Workspace packages get vendored as <code>file:vendor/*.tgz</code>
+            and force-pushed to Heroku from a clean working tree.
+          </p>
+          <p>
+            <a href="./heroku-buildpack.html">If you have a standalone agent repo, the buildpack flow is simpler.</a>
+          </p>
+        </div>
+      </section>
+
+      <section class="alt">
+        <div class="container">
+          <p class="section-eyebrow">Template</p>
+          <h2 class="section-title">The <code>apps/demo/</code> template</h2>
+          <p class="section-lead">
+            Five files under one directory, committed to the source repo. The
+            deploy script reads from here and assembles a clean working tree
+            elsewhere — nothing inside <code>apps/demo/</code> is mutated at
+            deploy time.
+          </p>
+
+          <pre data-lang="bash"><code>apps/demo/
+├── Procfile
+├── package.json
+├── agents/
+│   └── mcp_demo.agent
+├── scripts/
+│   └── deploy.sh
+└── .gitignore        # vendor/, node_modules/</code></pre>
+
+          <p style="margin-top: 24px">
+            <code>Procfile</code> is the dyno boot command. <code>package.json</code>
+            pins <code>@agentscript/server</code> as a <code>file:vendor/*.tgz</code>
+            dependency and lists every transitively required workspace package
+            under <code>overrides</code> using the same <code>file:</code> form.
+            <code>agents/</code> holds the <code>.agent</code> source the dyno
+            actually loads. <code>scripts/deploy.sh</code> is the deploy. The
+            <code>vendor/</code> dir is gitignored and rebuilt fresh on every
+            deploy from <code>pnpm pack</code> output.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <div class="container">
+          <p class="section-eyebrow">Deploy</p>
+          <h2 class="section-title">What <code>deploy.sh</code> does</h2>
+          <p class="section-lead">
+            Each invocation runs four stages end-to-end. The script tears down
+            and rebuilds <code>.deploy/</code> from scratch every time, so a
+            failed deploy never leaves stale state.
+          </p>
+
+          <div class="steps">
+            <div class="step">
+              <div>
+                <h3><code>pnpm pack</code> workspace packages</h3>
+                <p>
+                  The script's <code>PACKAGES=(…)</code> array names every
+                  workspace package the server needs at runtime —
+                  <code>runtime</code>, <code>runtime-vercel</code>,
+                  <code>server</code>, the three dialect packages
+                  (<code>agentscript</code>, <code>agentforce</code>,
+                  <code>agentfabric</code>), <code>compiler</code>,
+                  <code>parser</code>, <code>parser-javascript</code>,
+                  <code>parser-tree-sitter</code>, <code>language</code>,
+                  <code>types</code>, <code>cli</code>, and
+                  <code>agentforce</code>. Each is packed into a temp
+                  <code>.deploy/vendor/</code> as a versioned
+                  <code>.tgz</code>.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Assemble <code>.deploy/</code></h3>
+                <p>
+                  <code>Procfile</code>, <code>package.json</code>, and the
+                  <code>agents/</code> directory are copied verbatim from
+                  <code>apps/demo/</code> into <code>.deploy/</code>
+                  alongside the freshly built <code>vendor/</code>. The
+                  source <code>apps/demo/</code> tree stays clean.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Validate <code>file:vendor/*.tgz</code> overrides</h3>
+                <p>
+                  An inline <code>node -e</code> step reads the staged
+                  <code>package.json</code>, walks every
+                  <code>overrides</code> value beginning with
+                  <code>file:</code>, and asserts each tarball exists on disk.
+                  Any miss aborts the script with a
+                  <code>Did you bump package.json versions before deploy?</code>
+                  message. The usual cause: a package version was bumped in
+                  source but the matching <code>file:</code> ref in
+                  <code>apps/demo/package.json</code> wasn't.
+                </p>
+              </div>
+            </div>
+
+            <div class="step">
+              <div>
+                <h3>Force-push to Heroku</h3>
+                <p>
+                  <code>git init</code> inside <code>.deploy/</code>, single
+                  commit, add
+                  <code>https://git.heroku.com/agentscript-runner-demo.git</code>
+                  as the <code>heroku</code> remote, then
+                  <code>git push heroku main --force</code>. Heroku runs the
+                  standard <code>heroku/nodejs</code> buildpack against the
+                  staged tree.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p style="margin-top: 32px">From the workspace root:</p>
+
+          <pre data-lang="bash"><code>./apps/demo/scripts/deploy.sh</code></pre>
+        </div>
+      </section>
+
+      <section class="alt">
+        <div class="container">
+          <p class="section-eyebrow">Configuration</p>
+          <h2 class="section-title">Required Heroku config vars</h2>
+          <p class="section-lead">
+            Secrets stay on the Heroku side — the script never writes them.
+            Set each var with <code>heroku config:set</code> before the first
+            deploy.
+          </p>
+
+          <table class="env-table">
+            <thead>
+              <tr><th>Variable</th><th>Required</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="var"><code>OPENAI_API_KEY</code></td>
+                <td class="note">yes</td>
+                <td class="note">Provider key for the LLM.</td>
+              </tr>
+              <tr>
+                <td class="var"><code>MCP_AUTH_TOKENS</code></td>
+                <td class="note">opt</td>
+                <td class="note">Comma-separated bearer tokens. Required only if exposing <code>/mcp</code> to external clients.</td>
+              </tr>
+              <tr>
+                <td class="var"><code>CORS_ALLOWED_ORIGINS</code></td>
+                <td class="note">opt</td>
+                <td class="note">Comma-separated origins; required if a browser will call this app.</td>
+              </tr>
+              <tr>
+                <td class="var"><code>DEMO_AGENT_ID</code></td>
+                <td class="note">opt</td>
+                <td class="note">Default <code>mcp_demo</code>. The path-segment id used by <code>/einstein/ai-agent/v1/agents/&lt;id&gt;/sessions</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <div class="container">
+          <p class="section-eyebrow">Traps</p>
+          <h2 class="section-title">Two traps to know about</h2>
+          <p class="section-lead">
+            Both have bitten this app. The deploy reports success in both
+            cases — the breakage only shows up at runtime.
+          </p>
+
+          <h3>The version-bump trap.</h3>
+          <p>
+            npm caches <code>file:vendor/&lt;name&gt;-&lt;ver&gt;.tgz</code>
+            by filename. Re-pushing the same-name tarball is a silent no-op
+            — Heroku reports the release succeeded, the dyno keeps the old
+            code. Bump the package's version in source
+            (<code>packages/&lt;pkg&gt;/package.json</code>) before
+            re-deploying. The override-validation step catches the mismatch
+            when the tarball name in <code>apps/demo/package.json</code>
+            no longer resolves on disk.
+          </p>
+
+          <h3 style="margin-top: 24px">The <code>AGENTS_DIR=./agents</code> trap.</h3>
+          <p>
+            The <code>Procfile</code> sets <code>AGENTS_DIR=./agents</code>,
+            so the dyno reads <code>apps/demo/agents/</code>, NOT the
+            <code>agents/</code> dir bundled inside the
+            <code>@agentscript/server</code> tarball. Edits to
+            <code>packages/server/agents/*.agent</code> must be copied into
+            <code>apps/demo/agents/*.agent</code>, or the live agent stays
+            stale. Confirmed in v13 → v14 of the live demo.
+          </p>
+        </div>
+      </section>
+
+      <section class="alt">
+        <div class="container">
+          <p class="section-eyebrow">MCP</p>
+          <h2 class="section-title">MCP bearer-gate</h2>
+          <p class="section-lead">
+            The demo agent embeds an MCP server
+            (<code>search_flights</code>, <code>search_hotels</code>,
+            <code>book_trip</code>) and re-enters it through its own
+            <code>/mcp</code> URL. <code>MCP_AUTH_TOKENS</code> enforces a
+            bearer gate at the routing layer; <code>node.ts</code> forwards
+            <code>mcpAuthTokens[0]</code> into
+            <code>MCP_INTERNAL_TOKEN</code> automatically so the self-loop
+            works without extra config.
+          </p>
+
+          <p style="margin-top: 24px">Generate and set a token:</p>
+
+          <pre data-lang="bash"><code>heroku config:set MCP_AUTH_TOKENS=$(openssl rand -hex 16) -a agentscript-runner-demo</code></pre>
+        </div>
+      </section>
+
+      <section>
+        <div class="container">
+          <p class="section-eyebrow">Smoke test</p>
+          <h2 class="section-title">Smoke-testing the live agent</h2>
+          <p class="section-lead">
+            One command exercises the full live path after every deploy.
+          </p>
+
+          <pre data-lang="bash"><code>MCP_AUTH_TOKEN=… node packages/server/scripts/smoke-mcp-remote.mjs</code></pre>
+
+          <p style="margin-top: 24px">
+            The script probes the 401 path, connects with the bearer, lists
+            tools, then calls <code>search_flights</code>,
+            <code>search_hotels</code>, and <code>book_trip</code>
+            (deterministic + error path).
+          </p>
+
+          <p style="margin-top: 24px">Expected output:</p>
+
+          <pre data-lang="bash"><code>✓ /mcp rejects unauthenticated request (401)
+✓ connected to https://…/mcp (with bearer)
+✓ tools/list returned 3 tools with annotations + outputSchemas
+✓ search_flights -&gt; 2 flights, picked FL-101
+✓ search_hotels -&gt; 2 hotels, picked HT-NYC-1
+✓ book_trip flat shape, confirmation BK-…, total $557
+✓ book_trip deterministic
+✓ book_trip error path: { booked: false, error: "Unknown flight_id…" }
+
+✅ Live MCP smoke passed</code></pre>
+        </div>
+      </section>
+
+      <section class="alt">
+        <div class="container">
+          <p class="section-eyebrow">Reference</p>
+          <h2 class="section-title">Where to go next</h2>
+          <p class="section-lead">
+            Back to <a href="./">all deploy paths</a>. For a standalone agent
+            repo without the monorepo overhead, the
+            <a href="./heroku-buildpack.html">Heroku buildpack flow</a> is
+            simpler. For a serverless target, see
+            <a href="./vercel.html">Deploy to Vercel</a>. The maintenance
+            reference for this app — every config var, every trap, every
+            version-bump rule — lives at <code>apps/demo/CLAUDE.md</code>
+            in the repo.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="footer-row">
+          <span class="brand-line">
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 19 L12 5 L19 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+              <line x1="8" y1="14.5" x2="16" y2="14.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            AgentScript <span class="brand-tag on-deep">OSS</span>
+          </span>
+          <div>
+            <a href="https://github.com/salesforce/agentscript">GitHub</a> ·
+            <a href="/docs/">Docs</a> ·
+            <a href="https://www.npmjs.com/org/agentscript">npm</a> ·
+            <a href="https://github.com/salesforce/agentscript/blob/main/LICENSE.txt">License</a>
+          </div>
+        </div>
+        <div class="meta">
+          © Salesforce, Inc. · Apache-2.0 · Built by the AgentScript OSS team.
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="../assets/site.js"></script>
+  </body>
+</html>
