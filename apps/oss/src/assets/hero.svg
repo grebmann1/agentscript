@@ -18,7 +18,7 @@
         0%   { opacity: 0; transform: translateX(0); }
         15%  { opacity: 1; }
         85%  { opacity: 1; }
-        100% { opacity: 0; transform: translateX(86px); }
+        100% { opacity: 0; transform: translateX(-86px); }
       }
       .ping-in  { fill: #0176d3; animation: flow-in 2.4s ease-in-out infinite; }
       .ping-out { fill: #2e844a; animation: flow-out 2.4s ease-in-out infinite 1.2s; }
@@ -72,19 +72,19 @@
 
   <!-- ================= Inbound request ================= -->
   <g>
-    <text x="22" y="148" class="label-mono" fill="#0176d3">POST</text>
-    <text x="22" y="164" class="label-body" fill="#444444">/messages</text>
-    <line x1="22" y1="184" x2="116" y2="184" class="stroke-brand" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
-    <path d="M108 178 L 118 184 L 108 190" fill="none" class="stroke-brand" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="22" cy="184" r="4" class="ping-in"/>
+    <text x="22" y="118" class="label-mono" fill="#0176d3">POST</text>
+    <text x="22" y="134" class="label-body" fill="#444444">/messages</text>
+    <line x1="22" y1="154" x2="116" y2="154" class="stroke-brand" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
+    <path d="M108 148 L 118 154 L 108 160" fill="none" class="stroke-brand" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="22" cy="154" r="4" class="ping-in"/>
   </g>
 
   <!-- ================= Outbound response ================= -->
   <g>
-    <text x="698" y="148" class="label-mono" fill="#2e844a" text-anchor="end">SSE</text>
-    <text x="698" y="164" class="label-body" fill="#444444" text-anchor="end">stream</text>
-    <line x1="604" y1="184" x2="698" y2="184" class="stroke-success" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
-    <path d="M690 178 L 700 184 L 690 190" fill="none" class="stroke-success" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="604" cy="184" r="4" class="ping-out"/>
+    <text x="22" y="214" class="label-mono" fill="#2e844a">SSE</text>
+    <text x="22" y="230" class="label-body" fill="#444444">stream</text>
+    <line x1="118" y1="200" x2="22" y2="200" class="stroke-success" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
+    <path d="M30 194 L 20 200 L 30 206" fill="none" class="stroke-success" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="118" cy="200" r="4" class="ping-out"/>
   </g>
 </svg>
