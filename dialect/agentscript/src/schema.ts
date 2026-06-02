@@ -318,11 +318,130 @@ export const ConnectedSubagentBlock = NamedBlock(
   { capabilities: ['invocationTarget', 'transitionTarget'] }
 );
 
+// ---------------------------------------------------------------------------
+// Deployment block — companion configuration consumed by the OSS server.
+//
+// The compiler reads `deployment.llm`, `deployment.mcp.<server>`, and
+// `deployment.server` to drive runtime LLM selection, MCP server
+// registration, and HTTP server hardening. Values may be literals or
+// `env(NAME)` references resolved at server boot.
+//
+// All sub-blocks accept arbitrary string fields (env-ref or literal) so
+// secrets, URLs, and custom headers can be modeled without hard-coding
+// every key in the dialect schema.
+// ---------------------------------------------------------------------------
+
+const DeploymentLlmFallbackBlock = Block('DeploymentLlmFallbackBlock', {
+  provider: StringValue.describe(
+    'Fallback provider (e.g., "anthropic", "openai", "google", "openai-compatible").'
+  ),
+  model: StringValue.describe('Fallback model identifier.'),
+  api_key: StringValue.describe(
+    'API key. Use env(NAME) to reference an environment variable.'
+  ),
+  base_url: StringValue.describe(
+    'Optional base URL override. Use env(NAME) for environment substitution.'
+  ),
+}).describe('Fallback LLM configuration used when the primary fails.');
+
+const DeploymentLlmBlock = Block('DeploymentLlmBlock', {
+  provider: StringValue.describe(
+    'LLM provider: "anthropic", "openai", "google", or "openai-compatible".'
+  ),
+  model: StringValue.describe(
+    'Model identifier (e.g., "gpt-4o-mini", "claude-opus-4-5").'
+  ),
+  api_key: StringValue.describe(
+    'API key. Use env(NAME) to reference an environment variable.'
+  ),
+  base_url: StringValue.describe(
+    'Optional base URL override. Use env(NAME) for environment substitution.'
+  ),
+  fallback: DeploymentLlmFallbackBlock,
+}).describe('LLM provider/model configuration for the OSS runtime.');
+
+const DeploymentMcpAuthBlock = Block('DeploymentMcpAuthBlock', {
+  strategy: StringValue.describe(
+    'Authentication strategy: "api_key", "bearer", or "none".'
+  ),
+  key: StringValue.describe(
+    'API key / bearer token. Use env(NAME) for environment substitution.'
+  ),
+}).describe('Authentication configuration for the MCP server.');
+
+const DeploymentMcpHeadersBlock = Block(
+  'DeploymentMcpHeadersBlock',
+  {},
+  {
+    wildcardPrefixes: [{ prefix: '', fieldType: StringValue }],
+  }
+).describe(
+  'Custom HTTP headers sent on every request. Values may use env(NAME) substitution. Quote header names that contain dashes.'
+);
+
+const DeploymentMcpServerBlock = NamedBlock(
+  'DeploymentMcpServerBlock',
+  {
+    transport: StringValue.describe(
+      'Transport: "http" or "streamable-http". (stdio/sse coming soon.)'
+    ),
+    url: StringValue.describe(
+      'Server endpoint URL. Use env(NAME) for environment substitution.'
+    ),
+    headers: DeploymentMcpHeadersBlock,
+    auth: DeploymentMcpAuthBlock,
+  },
+  { scopeAlias: 'mcp' }
+).describe(
+  'A named MCP server. Reference its tools via mcp://<server>/<tool> action targets.'
+);
+
+const DeploymentMcpBlock = NamedCollectionBlock(DeploymentMcpServerBlock);
+
+const DeploymentServerBlock = Block('DeploymentServerBlock', {
+  auth_token: StringValue.describe(
+    'HTTP bearer token gating server endpoints. Use env(NAME) for environment substitution.'
+  ),
+  rate_limit_rpm: StringValue.describe(
+    'Per-session request rate limit (requests-per-minute). Use env(NAME) for environment substitution.'
+  ),
+  session_store: StringValue.describe(
+    'Session store backend: "memory" (default) or "postgres".'
+  ),
+}).describe('OSS HTTP server hardening configuration.');
+
+export const DeploymentBlock = Block('DeploymentBlock', {
+  llm: DeploymentLlmBlock,
+  mcp: DeploymentMcpBlock,
+  server: DeploymentServerBlock,
+})
+  .describe(
+    'Companion deployment configuration consumed by the OSS server (LLM, MCP servers, HTTP hardening).'
+  )
+  .example(
+    `deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        github:
+            transport: "streamable-http"
+            url: "https://api.githubcopilot.com/mcp/"
+            auth:
+                strategy: "bearer"
+                key: "env(GITHUB_PAT)"
+    server:
+        auth_token: "env(SERVER_AUTH_TOKEN)"
+        session_store: "memory"`
+  );
+
 export const AgentScriptSchema = {
   system: SystemBlock,
   config: ConfigBlock,
   variables: VariablesBlock,
   language: LanguageBlock,
+  deployment: DeploymentBlock,
   connected_subagent: NamedCollectionBlock(ConnectedSubagentBlock),
   start_agent: NamedCollectionBlock(
     StartAgentBlock.clone().example(

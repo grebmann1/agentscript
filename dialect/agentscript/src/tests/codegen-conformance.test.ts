@@ -98,6 +98,7 @@ describe('type conformance', () => {
       | 'config'
       | 'variables'
       | 'language'
+      | 'deployment'
       | 'connected_subagent'
       | 'start_agent'
       | 'subagent';
