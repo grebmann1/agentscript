@@ -1,6 +1,6 @@
 {
   "name": "@agentscript/server",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "AgentScript server with REST, SSE, and WebSocket sessions.",
   "type": "module",
   "main": "dist/index.js",
