@@ -81,8 +81,8 @@
 
   <!-- ================= Outbound response ================= -->
   <g>
-    <text x="22" y="214" class="label-mono" fill="#2e844a">SSE</text>
-    <text x="22" y="230" class="label-body" fill="#444444">stream</text>
+    <text x="22" y="222" class="label-mono" fill="#2e844a">SSE</text>
+    <text x="22" y="238" class="label-body" fill="#444444">stream</text>
     <line x1="118" y1="200" x2="22" y2="200" class="stroke-success" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round"/>
     <path d="M30 194 L 20 200 L 30 206" fill="none" class="stroke-success" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="118" cy="200" r="4" class="ping-out"/>

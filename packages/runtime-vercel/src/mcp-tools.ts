@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createHash } from 'node:crypto';
 import type { McpAdapter } from '@agentscript/runtime';
 
 /**
@@ -97,11 +96,20 @@ function buildToolKey(server: string, tool: string): string {
     return `${server}__${tool}`;
   }
   const sanitize = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '_');
-  const hash = createHash('sha256')
-    .update(`${server}::${tool}`)
-    .digest('hex')
-    .slice(0, 6);
-  return `${sanitize(server)}__${sanitize(tool)}__${hash}`;
+  return `${sanitize(server)}__${sanitize(tool)}__${shortHash(`${server}::${tool}`)}`;
+}
+
+// 6-char non-cryptographic hash (FNV-1a 32-bit). The only requirement is that
+// distinct (server, tool) pairs almost-always produce distinct suffixes after
+// sanitization; collisions are caught loudly by the keyOwner check upstream.
+// Implemented inline to keep this module browser-safe (no node:crypto import).
+function shortHash(input: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0').slice(0, 6);
 }
 
 /**

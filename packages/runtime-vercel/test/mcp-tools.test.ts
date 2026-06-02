@@ -4,7 +4,6 @@
  */
 
 import { createServer, type Server } from 'node:http';
-import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { McpAdapter } from '@agentscript/runtime';
 import { mcpToolsForVercel } from '../src/mcp-tools.js';
@@ -282,15 +281,14 @@ describe('mcpToolsForVercel — name safety', () => {
 
     const tools = await mcpToolsForVercel(adapter, factory);
 
-    // Key: sanitized `send_dm` plus 6-char SHA-256 suffix from `demo::send/dm`.
-    const expectedHash = createHash('sha256')
-      .update('demo::send/dm')
-      .digest('hex')
-      .slice(0, 6);
-    const expectedKey = `demo__send_dm__${expectedHash}`;
-    expect(Object.keys(tools)).toEqual([expectedKey]);
-    // Vercel-style ASCII-safe key: only [A-Za-z0-9_-].
-    expect(expectedKey).toMatch(/^[A-Za-z0-9_-]+$/);
+    // Key: sanitized `send_dm` plus a 6-char hash suffix derived from
+    // `demo::send/dm`. The hash algorithm is deliberately not part of the
+    // contract — only the shape (`<server>__<tool>__<6-hex>`) and the
+    // ASCII-safe charset are.
+    const keys = Object.keys(tools);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatch(/^demo__send_dm__[a-f0-9]{6}$/);
+    expect(keys[0]).toMatch(/^[A-Za-z0-9_-]+$/);
 
     // execute() routes through a percent-encoded target so the runtime parser
     // can decode the original tool name (slashes round-trip via `%2F`).
@@ -336,11 +334,7 @@ describe('mcpToolsForVercel — name safety', () => {
     expect(new Set(keys).size).toBe(2);
     // `send_dm` is fully ASCII-safe → no hash suffix.
     expect(keys).toContain('slack__send_dm');
-    // `send/dm` → sanitized + hash.
-    const slashHash = createHash('sha256')
-      .update('slack::send/dm')
-      .digest('hex')
-      .slice(0, 6);
-    expect(keys).toContain(`slack__send_dm__${slashHash}`);
+    // `send/dm` → sanitized + 6-hex hash suffix (algorithm-agnostic match).
+    expect(keys.some(k => /^slack__send_dm__[a-f0-9]{6}$/.test(k))).toBe(true);
   });
 });
