@@ -3,28 +3,27 @@ import SiteFooter from '@/components/SiteFooter';
 import CodeBlock from '@/components/CodeBlock';
 import DemoChat from '@/components/DemoChat';
 
-const RUNTIME_TS = `import { Runtime, ToolRegistry, FnAdapter } from '@agentscript/runtime';
+const RUNTIME_TS = `import { Runtime, ToolRegistry, McpAdapter } from '@agentscript/runtime';
 
-const fn = new FnAdapter();
-fn.register('lookup_order', async ({ id }) => ({ status: 'shipped' }));
+const mcp = new McpAdapter({ url: process.env.MCP_INTERNAL_URL });
 
 const tools = new ToolRegistry();
-tools.register('fn', fn);
+tools.register('mcp', mcp);
 
 const runtime = new Runtime({ doc, tools, llm: myDriver });
-const result = await runtime.turn('check ORD-42');`;
+const result = await runtime.turn('Find flights from SF to NYC on 2026-07-04');`;
 
 const RUNTIME_VERCEL_TS = `import { generateText } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { openai } from '@ai-sdk/openai';
 import { compileSource, createAgent } from '@agentscript/runtime-vercel';
 
 const { output } = compileSource(source);
 const agent = createAgent({
   doc: output,
-  llm: { model: anthropic('claude-haiku-4-5'), generateText },
+  llm: { model: openai('gpt-4o-mini'), generateText },
   tools,
 });
-const stream = agent.stream('check ORD-42');`;
+const stream = agent.stream('Find flights from SF to NYC on 2026-07-04');`;
 
 const CLI_BASH = `npx @agentscript/cli build agents/ \\
   --out dist-agent --name my-agent
@@ -38,7 +37,7 @@ const CLI_BASH = `npx @agentscript/cli build agents/ \\
 
 const SERVER_BASH = `# Bundle from \`agentscript build\` already wires this up.
 AGENTS_DIR=./agents \\
-ANTHROPIC_API_KEY=sk-... \\
+OPENAI_API_KEY=sk-... \\
 node node_modules/@agentscript/server/dist/index.js`;
 
 const SUPPORT_AGENT = `system:
@@ -113,42 +112,35 @@ const HEROKU_BUILDPACKS = `heroku create my-agent
 heroku buildpacks:add https://github.com/salesforce/agentscript-buildpack
 heroku buildpacks:add heroku/nodejs`;
 
-const HEROKU_PUSH = `heroku config:set ANTHROPIC_API_KEY=sk-... \\
-                  GITHUB_MCP_TOKEN=ghp_...
-heroku addons:create heroku-postgresql:essential-0   # optional
+const HEROKU_PUSH = `heroku config:set OPENAI_API_KEY=sk-...
+heroku config:set MCP_AUTH_TOKENS=$(openssl rand -hex 16)
 
 git init && git add . && git commit -m "init"
 git push heroku main`;
 
 const HEROKU_CURL = `BASE=https://my-agent.herokuapp.com
 
-SID=$(curl -s -X POST $BASE/einstein/ai-agent/v1/agents/support/sessions \\
+SID=$(curl -s -X POST $BASE/einstein/ai-agent/v1/agents/travel/sessions \\
   -H 'Content-Type: application/json' \\
-  -d '{"userId":"u1"}' | jq -r .sessionId)
+  -d '{}' | jq -r .sessionId)
 
 curl -N -X POST $BASE/einstein/ai-agent/v1/sessions/$SID/messages \\
   -H 'Content-Type: application/json' \\
-  -H 'Accept: text/event-stream' \\
-  -d '{"message":"check ORD-42"}'`;
+  -d '{"message":{"sequenceId":1,"type":"Text","text":"Find flights from SF to NYC on 2026-07-04"}}'`;
 
 const SDK_COMPILE = `import { generateText } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { ToolRegistry, FnAdapter } from '@agentscript/runtime';
+import { openai } from '@ai-sdk/openai';
+import { ToolRegistry, McpAdapter } from '@agentscript/runtime';
 import { compileSource, createAgent } from '@agentscript/runtime-vercel';
 
 const { output } = compileSource(agentScriptSource);
 
-const fn = new FnAdapter();
-fn.register('lookup_order', async ({ order_number }) => ({
-  status: order_number === 'ORD-42' ? 'shipped' : 'unknown',
-}));
-
 const tools = new ToolRegistry();
-tools.register('fn', fn);
+tools.register('mcp', new McpAdapter({ url: process.env.MCP_INTERNAL_URL }));
 
 export const agent = createAgent({
   doc: output,
-  llm: { model: anthropic('claude-haiku-4-5'), generateText },
+  llm: { model: openai('gpt-4o-mini'), generateText },
   tools,
 });`;
 
@@ -186,9 +178,9 @@ export default function Page() {
                 Create an agent. <em>Ship it your way.</em>
               </h1>
               <p className="hero-sub">
-                Write the agent in AgentScript, then choose the deployment
-                path: self-host a ready server on Heroku, or embed the runtime
-                in your own TypeScript app with Vercel AI SDK provider support.
+                Write the agent in AgentScript, then choose the deployment path:
+                self-host a ready server on Heroku, or embed the runtime in your
+                own TypeScript app with Vercel AI SDK provider support.
               </p>
               <div className="cta">
                 <a className="btn primary" href="#quickstart">
@@ -275,8 +267,9 @@ export default function Page() {
               className="section-lead"
               style={{ marginTop: 24, fontSize: 15, maxWidth: 'none' }}
             >
-              Like what you see? <a href="#quickstart">Deploy your own on Heroku</a>{' '}
-              or <a href="#deploy">embed the runtime via the SDK</a>.
+              Like what you see?{' '}
+              <a href="#quickstart">Deploy your own on Heroku</a> or{' '}
+              <a href="#deploy">embed the runtime via the SDK</a>.
             </p>
           </div>
         </section>
@@ -374,10 +367,10 @@ export default function Page() {
               Use the whole server, or just the runtime pieces you need.
             </h2>
             <p className="section-lead">
-              The packages map to the deployment choice. Heroku self deploy
-              uses the server. Manual SDK deployment uses the runtime plus the
-              Vercel AI SDK adapter. Advanced integrations can bring their own
-              LLM driver directly to the runtime.
+              The packages map to the deployment choice. Heroku self deploy uses
+              the server. Manual SDK deployment uses the runtime plus the Vercel
+              AI SDK adapter. Advanced integrations can bring their own LLM
+              driver directly to the runtime.
             </p>
 
             <div className="packages">
@@ -404,8 +397,8 @@ export default function Page() {
                 <p className="pkg-tagline">Manual SDK deployment path.</p>
                 <p className="pkg-desc">
                   Vercel AI SDK adapter for Anthropic, OpenAI, Google, or any
-                  AI-SDK-compatible provider. Use it when your app owns
-                  routing, auth, persistence, and deployment.
+                  AI-SDK-compatible provider. Use it when your app owns routing,
+                  auth, persistence, and deployment.
                 </p>
                 <CodeBlock lang="ts">{RUNTIME_VERCEL_TS}</CodeBlock>
               </article>
@@ -422,8 +415,8 @@ export default function Page() {
                   Compile your <code>.agent</code> file(s) into the same bundle
                   the Heroku buildpack produces, but locally — for Docker,
                   Kubernetes, or any host that runs Node. Walks{' '}
-                  <code>deployment:</code> for env-var refs and emits a
-                  complete project layout.
+                  <code>deployment:</code> for env-var refs and emits a complete
+                  project layout.
                 </p>
                 <CodeBlock lang="bash">{CLI_BASH}</CodeBlock>
               </article>
@@ -435,10 +428,10 @@ export default function Page() {
                 </div>
                 <p className="pkg-tagline">Heroku-ready agent API server.</p>
                 <p className="pkg-desc">
-                  Hono-based server with REST, Server-Sent Events, and
-                  WebSocket sessions. Loads the LLM provider and MCP servers
-                  directly from the agent's <code>deployment:</code> block.
-                  In-memory or Postgres storage.
+                  Hono-based server with REST, Server-Sent Events, and WebSocket
+                  sessions. Loads the LLM provider and MCP servers directly from
+                  the agent's <code>deployment:</code> block. In-memory or
+                  Postgres storage.
                 </p>
                 <CodeBlock lang="bash">{SERVER_BASH}</CodeBlock>
               </article>
@@ -457,8 +450,8 @@ export default function Page() {
               The AgentScript Heroku buildpack turns a directory of{' '}
               <code>.agent</code> files into a running service. No{' '}
               <code>package.json</code>, no <code>Procfile</code>, no local
-              build step. The buildpack runs the compiler on the dyno,
-              scaffolds the server, and hands off to <code>heroku/nodejs</code>.
+              build step. The buildpack runs the compiler on the dyno, scaffolds
+              the server, and hands off to <code>heroku/nodejs</code>.
             </p>
 
             <div className="steps">
@@ -472,8 +465,8 @@ export default function Page() {
                     MCP servers the agent needs. Use <code>env(NAME)</code> for
                     secrets — they are resolved on the dyno at boot, never at
                     compile time. <code>actions</code> in{' '}
-                    <code>start_agent</code> are typed and target tool URIs
-                    like <code>mcp://demo/search_flights</code>.
+                    <code>start_agent</code> are typed and target tool URIs like{' '}
+                    <code>mcp://demo/search_flights</code>.
                   </p>
                   <CodeBlock lang="agent">{SUPPORT_AGENT}</CodeBlock>
                 </div>
@@ -484,10 +477,9 @@ export default function Page() {
                   <h3>Add the buildpacks</h3>
                   <p>
                     Order matters: the AgentScript buildpack runs first to
-                    scaffold <code>package.json</code> and{' '}
-                    <code>Procfile</code>, then <code>heroku/nodejs</code>{' '}
-                    installs <code>@agentscript/server</code> and boots the
-                    dyno.
+                    scaffold <code>package.json</code> and <code>Procfile</code>
+                    , then <code>heroku/nodejs</code> installs{' '}
+                    <code>@agentscript/server</code> and boots the dyno.
                   </p>
                   <CodeBlock lang="bash">{HEROKU_BUILDPACKS}</CodeBlock>
                 </div>
@@ -523,8 +515,8 @@ export default function Page() {
             >
               Targeting Docker, Kubernetes, or another platform? Use{' '}
               <code>npx @agentscript/cli build agents/ --out dist-agent</code>{' '}
-              locally to produce the same bundle the buildpack would generate
-              on Heroku, then ship it however you like.
+              locally to produce the same bundle the buildpack would generate on
+              Heroku, then ship it however you like.
             </p>
           </div>
         </section>
@@ -536,10 +528,10 @@ export default function Page() {
               Embed AgentScript support in your own TypeScript app.
             </h2>
             <p className="section-lead">
-              Use this path when you already have an API surface, auth model,
-              or deployment target. The runtime executes the agent. The Vercel
-              AI SDK provides the model. Your app decides how requests,
-              sessions, and persistence work.
+              Use this path when you already have an API surface, auth model, or
+              deployment target. The runtime executes the agent. The Vercel AI
+              SDK provides the model. Your app decides how requests, sessions,
+              and persistence work.
             </p>
 
             <div className="deploy-stack">
@@ -557,10 +549,9 @@ export default function Page() {
                 className="section-lead"
                 style={{ marginTop: 8, fontSize: 15, maxWidth: 'none' }}
               >
-                The SDK path is intentionally small: compile the agent,
-                register tools, connect an AI SDK model, then stream from your
-                own route. It works anywhere TypeScript and the Vercel AI SDK
-                work.
+                The SDK path is intentionally small: compile the agent, register
+                tools, connect an AI SDK model, then stream from your own route.
+                It works anywhere TypeScript and the Vercel AI SDK work.
               </p>
             </div>
           </div>
