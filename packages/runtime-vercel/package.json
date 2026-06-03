@@ -1,6 +1,6 @@
 {
   "name": "@agentscript/runtime-vercel",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Vercel AI SDK adapter for @agentscript/runtime.",
   "type": "module",
   "main": "dist/index.js",

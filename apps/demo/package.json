@@ -10,7 +10,7 @@
     "node": "22.x"
   },
   "dependencies": {
-    "@agentscript/server": "file:vendor/agentscript-server-0.1.5.tgz"
+    "@agentscript/server": "file:vendor/agentscript-server-0.1.8.tgz"
   },
   "overrides": {
     "@agentscript/agentfabric-dialect": "file:vendor/agentscript-agentfabric-dialect-0.1.23.tgz",
@@ -24,8 +24,8 @@
     "@agentscript/parser-javascript": "file:vendor/agentscript-parser-javascript-2.4.0.tgz",
     "@agentscript/parser-tree-sitter": "file:vendor/agentscript-parser-tree-sitter-2.4.0.tgz",
     "@agentscript/runtime": "file:vendor/agentscript-runtime-0.1.1.tgz",
-    "@agentscript/runtime-vercel": "file:vendor/agentscript-runtime-vercel-0.1.1.tgz",
-    "@agentscript/server": "file:vendor/agentscript-server-0.1.5.tgz",
+    "@agentscript/runtime-vercel": "file:vendor/agentscript-runtime-vercel-0.1.3.tgz",
+    "@agentscript/server": "file:vendor/agentscript-server-0.1.8.tgz",
     "@agentscript/types": "file:vendor/agentscript-types-0.2.1.tgz"
   }
 }
