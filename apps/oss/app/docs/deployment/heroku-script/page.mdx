@@ -168,8 +168,11 @@ Once deployed, the server exposes:
 | `/einstein/ai-agent/v1/sessions/<sessionId>/messages` | `POST` | Send a message; receive an SSE stream of typed parts. |
 | `/mcp` | `POST` | MCP endpoint (bearer-gated when `MCP_AUTH_TOKENS` is set). Tools declared inline in the `.agent` file appear here. |
 
-The agent id (`<id>` above) is the agent name declared in the `.agent` file
-header.
+The agent id (`<id>` above) is the **`.agent` filename without the
+extension**, not the `config.agent_name` field inside the file. A file at
+`agents/travel.agent` is reachable as
+`/einstein/ai-agent/v1/agents/travel/sessions` regardless of what
+`agent_name` is set to.
 
 ## Multiple agents in one app
 
@@ -197,23 +200,37 @@ heroku config:set MCP_AUTH_TOKENS=$(openssl rand -hex 16) -a my-agent
 
 ## Smoke test
 
-`@agentscript/server` ships a smoke-test script that probes the 401 path,
-connects with a bearer, lists tools, and calls each one:
+A few `curl` calls are enough to verify the deploy. Replace
+`https://my-agent.herokuapp.com` and the bearer token with yours.
 
 ```bash
-MCP_AUTH_TOKEN=… node node_modules/@agentscript/server/scripts/smoke-mcp-remote.mjs https://my-agent.herokuapp.com
+URL=https://my-agent.herokuapp.com
+TOKEN=$(heroku config:get MCP_AUTH_TOKENS -a my-agent)
+
+# 1. /mcp rejects unauthenticated requests
+curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL/mcp"
+# → 401
+
+# 2. /mcp accepts a bearer and returns the tool catalog
+curl -s -X POST "$URL/mcp" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -H "accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
+
+# 3. Open an agent session, send a message
+SID=$(curl -s -X POST "$URL/einstein/ai-agent/v1/agents/travel/sessions" \
+  -H "content-type: application/json" -d '{}' \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).sessionId))')
+
+curl -s -X POST "$URL/einstein/ai-agent/v1/sessions/$SID/messages" \
+  -H "content-type: application/json" \
+  -d '{"message":{"sequenceId":1,"type":"Text","text":"Find flights from SF to NYC on 2026-07-04"}}'
 ```
 
-Expected output:
-
-```bash
-✓ /mcp rejects unauthenticated request (401)
-✓ connected to https://…/mcp (with bearer)
-✓ tools/list returned N tools with annotations + outputSchemas
-✓ each declared tool returns a valid result
-
-✅ Live MCP smoke passed
-```
+A successful third call returns a JSON envelope with an `Inform` message
+containing the agent's reply — proof that the LLM, the tool registry, and
+the embedded MCP server are all wired correctly.
 
 ## Where to go next
 
