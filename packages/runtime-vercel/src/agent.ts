@@ -6,6 +6,7 @@
 import {
   Runtime,
   ToolRegistry,
+  type Checkpoint,
   type RuntimeEvent,
   type LlmDriver,
   type TurnResult,
@@ -149,20 +150,45 @@ export interface CreateAgentOptions {
 export class AgentScriptAgent {
   private readonly runtime: Runtime;
 
-  constructor(opts: CreateAgentOptions) {
+  constructor(opts: CreateAgentOptions, checkpoint?: Checkpoint) {
     const driver: LlmDriver = new VercelAiSdkDriver(opts.llm);
-    this.runtime = new Runtime({
+    const runtimeOpts = {
       doc: opts.doc,
       llm: driver,
       tools: opts.tools ?? new ToolRegistry(),
       context: opts.context,
       maxStepsPerTurn: opts.maxStepsPerTurn,
-    });
+    };
+    this.runtime = checkpoint
+      ? Runtime.fromCheckpoint(runtimeOpts, checkpoint)
+      : new Runtime(runtimeOpts);
   }
 
   /** Direct read access to runtime state — useful for introspection between turns. */
   get state() {
     return this.runtime.state;
+  }
+
+  /**
+   * Capture a serializable snapshot of the agent's runtime state. Must be
+   * called between turns (will throw if called mid-turn).
+   */
+  checkpoint(opts?: {
+    id?: string;
+    metadata?: Record<string, unknown>;
+  }): Checkpoint {
+    return this.runtime.checkpoint(opts);
+  }
+
+  /**
+   * Restore an agent from a previous checkpoint. The checkpoint must have
+   * the matching schema version; throws `CheckpointVersionError` otherwise.
+   */
+  static fromCheckpoint(
+    opts: CreateAgentOptions,
+    checkpoint: Checkpoint
+  ): AgentScriptAgent {
+    return new AgentScriptAgent(opts, checkpoint);
   }
 
   /**

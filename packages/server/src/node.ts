@@ -9,6 +9,7 @@ import { AgentRegistry } from './agents.js';
 import { createApp } from './app.js';
 import { RuntimePolicy } from './runtime-policy.js';
 import { InMemorySessionStore, SessionService } from './sessions.js';
+import { FsSessionStore } from './stores/fs-session-store.js';
 import { PostgresSessionStore } from './stores/postgres-session-store.js';
 import type { ServerConfig } from './types.js';
 
@@ -78,6 +79,8 @@ export async function startServer(
       maxRequestBytes: config.maxRequestBytes,
       rateLimitWindowMs: config.rateLimitWindowMs,
       rateLimitMax: config.rateLimitMax,
+      rateLimitSessionsPerHour: config.rateLimitSessionsPerHour,
+      rateLimitMessagesPerHour: config.rateLimitMessagesPerHour,
     },
     runtimePolicy,
   });
@@ -122,9 +125,9 @@ export function readConfig(cwd = process.cwd()): ServerConfig {
     agentsDir: resolve(cwd, process.env.AGENTS_DIR ?? 'packages/server/agents'),
     sessionTtlMs: parsePositiveInt(process.env.SESSION_TTL_MS, 30 * 60 * 1000),
     maxSessions: parsePositiveInt(process.env.MAX_SESSIONS, 100),
-    sessionStoreBackend:
-      process.env.SESSION_STORE_BACKEND === 'postgres' ? 'postgres' : 'memory',
+    sessionStoreBackend: parseStoreBackend(process.env.SESSION_STORE_BACKEND),
     postgresUrl: process.env.POSTGRES_URL,
+    sessionStoreDir: process.env.SESSION_STORE_DIR,
     authTokens: parseList(process.env.API_AUTH_TOKENS),
     mcpAuthTokens: parseList(process.env.MCP_AUTH_TOKENS),
     corsAllowedOrigins: parseList(process.env.CORS_ALLOWED_ORIGINS, ['*']),
@@ -134,6 +137,14 @@ export function readConfig(cwd = process.cwd()): ServerConfig {
       60_000
     ),
     rateLimitMax: parsePositiveInt(process.env.RATE_LIMIT_MAX, 120),
+    rateLimitSessionsPerHour: parsePositiveInt(
+      process.env.RATE_LIMIT_SESSIONS_PER_HOUR,
+      10
+    ),
+    rateLimitMessagesPerHour: parsePositiveInt(
+      process.env.RATE_LIMIT_MESSAGES_PER_HOUR,
+      50
+    ),
     turnTimeoutMs: parsePositiveInt(process.env.TURN_TIMEOUT_MS, 45_000),
     llmCircuitFailures: parsePositiveInt(process.env.LLM_CIRCUIT_FAILURES, 5),
     llmCircuitOpenMs: parsePositiveInt(process.env.LLM_CIRCUIT_OPEN_MS, 60_000),
@@ -153,7 +164,24 @@ export async function createSessionStore(config: ServerConfig) {
     await store.init();
     return store;
   }
+  if (config.sessionStoreBackend === 'fs') {
+    if (!config.sessionStoreDir) {
+      throw new Error(
+        'SESSION_STORE_DIR is required when SESSION_STORE_BACKEND=fs'
+      );
+    }
+    const store = new FsSessionStore(config.sessionStoreDir);
+    await store.init();
+    return store;
+  }
   return new InMemorySessionStore();
+}
+
+function parseStoreBackend(
+  raw: string | undefined
+): ServerConfig['sessionStoreBackend'] {
+  if (raw === 'postgres' || raw === 'fs') return raw;
+  return 'memory';
 }
 
 function attachWebSocketServer(

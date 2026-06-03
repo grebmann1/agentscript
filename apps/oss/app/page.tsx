@@ -204,62 +204,13 @@ export default function Page() {
         <section id="demo">
           <div className="container">
             <p className="section-eyebrow">Live demo</p>
-            <h2 className="section-title">
-              Try the hosted travel-booking agent.
-            </h2>
+            <h2 className="section-title">Try a hosted AgentScript agent.</h2>
             <p className="section-lead">
-              Start a session and explore an AgentScript agent running through
-              the hosted server. The demo uses the <code>mcp_demo</code> agent,
-              three MCP tools served by an embedded MCP server, and OpenAI{' '}
-              <code>gpt-4o-mini</code>.
+              Toggle between two agents — <code>mcp_demo</code> (travel booking)
+              and <code>orders</code> (order lookup) — both running through the
+              hosted server with their own MCP tools served by an embedded MCP
+              server.
             </p>
-
-            <div className="demo-tools">
-              <article className="demo-tool-card">
-                <p className="demo-tool-eyebrow">MCP tool</p>
-                <h3>
-                  <code>search_flights(origin, destination, depart_date)</code>
-                </h3>
-                <ul>
-                  <li>
-                    <strong>SF → New York:</strong> FL-101, FL-102
-                  </li>
-                  <li>
-                    <strong>NY → London:</strong> FL-201
-                  </li>
-                  <li>
-                    <strong>SF → Tokyo:</strong> FL-301
-                  </li>
-                </ul>
-              </article>
-              <article className="demo-tool-card">
-                <p className="demo-tool-eyebrow">MCP tool</p>
-                <h3>
-                  <code>search_hotels(city, check_in, check_out)</code>
-                </h3>
-                <ul>
-                  <li>
-                    <strong>New York:</strong> HT-NYC-1, HT-NYC-2
-                  </li>
-                  <li>
-                    <strong>London:</strong> HT-LON-1
-                  </li>
-                  <li>
-                    <strong>Tokyo:</strong> HT-TYO-1
-                  </li>
-                </ul>
-              </article>
-              <article className="demo-tool-card">
-                <p className="demo-tool-eyebrow">MCP tool</p>
-                <h3>
-                  <code>book_trip(traveler_name, flight_id?, hotel_id?)</code>
-                </h3>
-                <ul>
-                  <li>Returns confirmation + total USD</li>
-                  <li>Validates flight_id / hotel_id</li>
-                </ul>
-              </article>
-            </div>
 
             <DemoChat />
 

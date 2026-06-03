@@ -37,16 +37,7 @@ export default function PocBanner() {
       <div className="poc-banner-inner">
         <span className="poc-banner-tag">POC</span>
         <span className="poc-banner-text">
-          AgentScript OSS is an early proof of concept. Expect rough edges —
-          feedback is welcome via the{' '}
-          <a
-            href="https://github.com/salesforce/agentscript/issues/new?template=poc-feedback.yml"
-            target="_blank"
-            rel="noopener"
-          >
-            feedback form
-          </a>
-          .
+          AgentScript OSS is an early proof of concept. Expect rough edges.
         </span>
         <button
           type="button"

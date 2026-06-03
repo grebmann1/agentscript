@@ -14,6 +14,8 @@ export interface MiddlewareConfig {
   maxRequestBytes: number;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  rateLimitSessionsPerHour?: number;
+  rateLimitMessagesPerHour?: number;
 }
 
 const rateLimitMap = new Map<string, { count: number; resetAtMs: number }>();

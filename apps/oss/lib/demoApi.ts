@@ -3,7 +3,15 @@ export interface StreamHandlers {
   onDelta?: (delta: string, full: string) => void;
   onDone?: (full: string) => void;
   onError?: (message: string) => void;
+  onEvent?: (event: { type: string; raw?: unknown }) => void;
   signal?: AbortSignal;
+}
+
+const startedAtMs = Date.now();
+function log(event: string, detail?: Record<string, unknown>): void {
+  const t = ((Date.now() - startedAtMs) / 1000).toFixed(2);
+  // eslint-disable-next-line no-console
+  console.log(`[demoApi t+${t}s] ${event}`, detail ?? {});
 }
 
 declare global {
@@ -31,9 +39,15 @@ async function requestJson<T = unknown>(
   throw lastError ?? new Error(`Request failed for ${path}`);
 }
 
-export async function startDemoSession(): Promise<{ sessionId: string }> {
+function demoBasePath(agentId: string): string {
+  return `/demo/agents/${encodeURIComponent(agentId)}`;
+}
+
+export async function startDemoSession(
+  agentId: string
+): Promise<{ sessionId: string }> {
   const payload = await requestJson<{ sessionId?: unknown }>(
-    '/demo/agent/session',
+    `${demoBasePath(agentId)}/session`,
     { method: 'POST' }
   );
   if (!payload || typeof payload.sessionId !== 'string') {
@@ -43,11 +57,12 @@ export async function startDemoSession(): Promise<{ sessionId: string }> {
 }
 
 export async function sendDemoMessage(
+  agentId: string,
   sessionId: string,
   text: string
 ): Promise<{ reply: string }> {
   const payload = await requestJson<{ reply?: unknown }>(
-    `/demo/agent/session/${encodeURIComponent(sessionId)}/message`,
+    `${demoBasePath(agentId)}/session/${encodeURIComponent(sessionId)}/message`,
     {
       method: 'POST',
       body: JSON.stringify({ text }),
@@ -60,19 +75,25 @@ export async function sendDemoMessage(
 }
 
 export async function streamDemoMessage(
+  agentId: string,
   sessionId: string,
   text: string,
   handlers: StreamHandlers = {}
 ): Promise<{ reply: string }> {
-  const path = `/demo/agent/session/${encodeURIComponent(sessionId)}/message/stream`;
+  const path = `${demoBasePath(agentId)}/session/${encodeURIComponent(sessionId)}/message/stream`;
   const bases = resolveApiBases();
   let lastError: unknown;
 
+  log('streamDemoMessage:start', { path, bases });
   for (const base of bases) {
     const url = base ? `${base}${path}` : path;
     try {
       return await streamDemoMessageAtUrl(url, text, handlers);
     } catch (error) {
+      log('streamDemoMessage:base-failed', {
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
       lastError = error;
     }
   }
@@ -81,10 +102,11 @@ export async function streamDemoMessage(
 }
 
 export async function endDemoSession(
+  agentId: string,
   sessionId: string
 ): Promise<{ ended: true }> {
   const payload = await requestJson<{ ended?: unknown }>(
-    `/demo/agent/session/${encodeURIComponent(sessionId)}`,
+    `${demoBasePath(agentId)}/session/${encodeURIComponent(sessionId)}`,
     { method: 'DELETE' }
   );
   if (!payload || payload.ended !== true) {
@@ -154,6 +176,7 @@ async function streamDemoMessageAtUrl(
   text: string,
   handlers: StreamHandlers
 ): Promise<{ reply: string }> {
+  log('stream:fetch', { url });
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -162,6 +185,11 @@ async function streamDemoMessageAtUrl(
     },
     body: JSON.stringify({ text }),
     signal: handlers.signal,
+  });
+  log('stream:response', {
+    url,
+    status: response.status,
+    contentType: response.headers.get('content-type'),
   });
 
   if (!response.ok) {
@@ -191,7 +219,10 @@ async function streamDemoMessageAtUrl(
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      log('stream:reader-done');
+      break;
+    }
     buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
 
     while (true) {
@@ -201,6 +232,9 @@ async function streamDemoMessageAtUrl(
       buffer = next.remaining;
       const payload = parseSseFrame(frame);
       if (!payload) continue;
+
+      log('stream:frame', { type: payload.type, payload });
+      handlers.onEvent?.({ type: payload.type ?? 'unknown', raw: payload });
 
       if (payload.type === 'status' && typeof payload.status === 'string') {
         handlers.onStatus?.(payload.status);

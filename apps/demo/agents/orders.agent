@@ -1,0 +1,90 @@
+system:
+    instructions: "You are a friendly support assistant for an online store. Help the customer check on their order status and track shipments. When you have an order number or tracking number, call the matching tool immediately — don't ask redundant questions."
+    messages:
+        error: "Sorry, the order service returned an error."
+        welcome: "Hi! I can help you check on the status of an order. Share your order number (try ORD-42) and I'll look it up."
+
+config:
+    agent_name: "OrderLookupAgent"
+    default_agent_user: "demo@example.com"
+
+language:
+    default_locale: "en_US"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        demo:
+            transport: "streamable-http"
+            url: "env(MCP_INTERNAL_URL)"
+            auth:
+                strategy: "bearer"
+                key: "env(MCP_INTERNAL_TOKEN)"
+
+variables:
+    last_order_number: mutable string = ""
+        description: "Most recent order number the user asked about"
+    last_order_status: mutable string = ""
+        description: "Status of the most recent order lookup"
+    last_tracking_number: mutable string = ""
+        description: "Most recent tracking number returned by an order lookup"
+
+start_agent order_assistant:
+    description: "Look up orders and tracking via the embedded MCP server"
+
+    actions:
+        Lookup_Order:
+            description: "Look up an order by its number"
+            inputs:
+                order_number: string
+                    description: "Order number (e.g. 'ORD-42')"
+                    is_required: True
+            outputs:
+                found: boolean
+                    description: "Whether the order was found"
+                order_id: string
+                    description: "Order id (e.g. 'ORD-42')"
+                status: string
+                    description: "Order status, e.g. shipped or processing"
+                tracking_number: string
+                    description: "Tracking number (empty if not yet shipped)"
+                total_usd: number
+                    description: "Total cost in USD"
+            target: "mcp://demo/lookup_order"
+
+        Get_Order_Tracking:
+            description: "Get tracking history for a tracking number"
+            inputs:
+                tracking_number: string
+                    description: "Tracking number returned by Lookup_Order"
+                    is_required: True
+            outputs:
+                found: boolean
+                    description: "Whether the tracking number was found"
+                carrier: string
+                    description: "Shipping carrier name"
+                last_location: string
+                    description: "Most recent scan location"
+                estimated_delivery: string
+                    description: "Estimated delivery date (YYYY-MM-DD)"
+            target: "mcp://demo/get_order_tracking"
+
+    reasoning:
+        instructions: ->
+            |   Help the user check on an order. Typical flow:
+            |     1. As soon as you have an order number, call {!@actions.lookup} and report the status.
+            |     2. If the user asks about delivery or tracking and we have a tracking_number, call {!@actions.track} for the carrier and ETA.
+            |   Try the example order number `ORD-42` if the user is just exploring.
+            |   Be concise: state the order id and the status in one short sentence, then offer to check tracking if it's been shipped.
+        actions:
+            lookup: @actions.Lookup_Order
+                with order_number=...
+                set @variables.last_order_number = @outputs.order_id
+                set @variables.last_order_status = @outputs.status
+                set @variables.last_tracking_number = @outputs.tracking_number
+
+            track: @actions.Get_Order_Tracking
+                with tracking_number=...

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Checkpoint } from '@agentscript/runtime';
 import type { AgentScriptAgent } from '@agentscript/runtime-vercel';
 import { AgentRegistry } from './agents.js';
 
@@ -22,6 +23,12 @@ export interface SessionRecord {
   lastActiveAt: string;
   busy: boolean;
   feedbackByMessageId: Record<string, SessionFeedback>;
+  /**
+   * Optional checkpoint of the agent runtime. Persisted between turns so the
+   * session can be rehydrated after a server restart when the store backend
+   * is durable (fs / postgres).
+   */
+  checkpoint?: Checkpoint;
 }
 
 interface RuntimeSessionState {
@@ -165,12 +172,23 @@ export class SessionService {
 
   async beginTurn(sessionId: string): Promise<ActiveTurn> {
     const record = await this.store.get(sessionId);
-    const runtime = this.runtimeSessions.get(sessionId);
-    if (!record || !runtime) {
+    if (!record) {
       throw new Error('Session not found');
     }
     if (record.busy) {
       throw new Error('Session is busy');
+    }
+
+    let runtime = this.runtimeSessions.get(sessionId);
+    if (!runtime) {
+      // Rehydrate from a durable store after a server restart. If the record
+      // has no checkpoint (e.g. it was created in-memory and persisted
+      // mid-flight) fall through to a fresh agent — better than throwing.
+      const agent = record.checkpoint
+        ? this.agents.restoreAgent(record.agentId, record.checkpoint)
+        : this.agents.createAgent(record.agentId);
+      runtime = { agent };
+      this.runtimeSessions.set(sessionId, runtime);
     }
 
     record.busy = true;
@@ -178,6 +196,7 @@ export class SessionService {
     await this.store.update(record);
     const abortController = new AbortController();
     runtime.abortController = abortController;
+    const runtimeRef = runtime;
 
     return {
       session: toView(record),
@@ -189,9 +208,15 @@ export class SessionService {
           if (!latest) return;
           latest.busy = false;
           latest.lastActiveAt = new Date().toISOString();
+          try {
+            latest.checkpoint = runtimeRef.agent.checkpoint();
+          } catch {
+            // Mid-turn checkpoint isn't valid; skip persisting it. Other
+            // record fields still get flushed.
+          }
           await this.store.update(latest);
         })();
-        runtime.abortController = undefined;
+        runtimeRef.abortController = undefined;
       },
     };
   }

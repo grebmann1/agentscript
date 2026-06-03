@@ -4,46 +4,39 @@ import {
   FnAdapter,
   HttpAdapter,
   ToolRegistry,
+  type Checkpoint,
   type McpAdapter,
 } from '@agentscript/runtime';
 import type {
   AgentDSLAuthoring,
   AgentDSLAuthoringWithDeployment,
-  LlmConfig,
-  McpServerConfig,
 } from '@agentscript/compiler';
 import {
   compileSource,
   createAgent,
-  type AgentScriptAgent,
+  AgentScriptAgent,
   type VercelDriverOptions,
 } from '@agentscript/runtime-vercel';
 import {
   createLlmOptionsFromDeployment,
   createLlmOptionsFromServerConfig,
-  reconcileDeploymentLlm,
 } from './llm-factory.js';
-import { createMcpAdapter, reconcileDeploymentMcp } from './mcp-factory.js';
+import { createMcpAdapter } from './mcp-factory.js';
 import type { ServerConfig } from './types.js';
 
-interface AgentDocEntry {
-  id: string;
+interface AgentEntry {
   doc: AgentDSLAuthoring;
+  llm: VercelDriverOptions;
+  tools: ToolRegistry;
 }
 
 export class AgentRegistry {
-  private readonly docs = new Map<string, AgentDSLAuthoring>();
-  private readonly tools: ToolRegistry;
+  private readonly entries = new Map<string, AgentEntry>();
 
-  private constructor(
-    entries: AgentDocEntry[],
-    private readonly llm: VercelDriverOptions,
-    tools: ToolRegistry
-  ) {
-    for (const entry of entries) {
-      this.docs.set(entry.id, entry.doc);
+  private constructor(entries: Array<{ id: string; entry: AgentEntry }>) {
+    for (const { id, entry } of entries) {
+      this.entries.set(id, entry);
     }
-    this.tools = tools;
   }
 
   static async load(
@@ -55,12 +48,7 @@ export class AgentRegistry {
       throw new Error(`No .agent files found in ${config.agentsDir}`);
     }
 
-    const entries: AgentDocEntry[] = [];
-    const llmDeclarations: Array<{ id: string; llm?: LlmConfig }> = [];
-    const mcpDeclarations: Array<{
-      id: string;
-      mcp?: Record<string, McpServerConfig>;
-    }> = [];
+    const built: Array<{ id: string; entry: AgentEntry }> = [];
     for (const filePath of files) {
       const source = await readFile(filePath, 'utf8');
       const result = compileSource(source);
@@ -73,54 +61,65 @@ export class AgentRegistry {
         const messages = hardErrors.map(error => error.message).join('; ');
         throw new Error(`Failed to compile ${filePath}: ${messages}`);
       }
-      const fileName = path.basename(filePath, '.agent');
-      entries.push({ id: fileName, doc: result.output });
+      const id = path.basename(filePath, '.agent');
       const deployment = (result.output as AgentDSLAuthoringWithDeployment)
         .deployment;
-      llmDeclarations.push({ id: fileName, llm: deployment?.llm });
-      mcpDeclarations.push({ id: fileName, mcp: deployment?.mcp });
+
+      const agentLlm = deployment?.llm
+        ? createLlmOptionsFromDeployment(deployment.llm)
+        : (llm ?? createLlmOptionsFromServerConfig(config));
+
+      const mcpAdapter = deployment?.mcp
+        ? createMcpAdapter(deployment.mcp)
+        : undefined;
+
+      built.push({
+        id,
+        entry: {
+          doc: result.output,
+          llm: agentLlm,
+          tools: createToolRegistry(config, mcpAdapter),
+        },
+      });
     }
 
-    const declaredLlm = reconcileDeploymentLlm(llmDeclarations);
-    const effectiveLlm =
-      llm ??
-      (declaredLlm
-        ? createLlmOptionsFromDeployment(declaredLlm)
-        : createLlmOptionsFromServerConfig(config));
-
-    const declaredMcp = reconcileDeploymentMcp(mcpDeclarations);
-    const mcpAdapter = declaredMcp ? createMcpAdapter(declaredMcp) : undefined;
-
-    return new AgentRegistry(
-      entries,
-      effectiveLlm,
-      createToolRegistry(config, mcpAdapter)
-    );
+    return new AgentRegistry(built);
   }
 
   listAgents(): string[] {
-    return [...this.docs.keys()].sort();
+    return [...this.entries.keys()].sort();
   }
 
   hasAgent(agentId: string): boolean {
-    return this.docs.has(agentId);
+    return this.entries.has(agentId);
   }
 
   createAgent(
     agentId: string,
     context?: Record<string, unknown>
   ): AgentScriptAgent {
-    const doc = this.docs.get(agentId);
-    if (!doc) {
+    const entry = this.entries.get(agentId);
+    if (!entry) {
       throw new Error(`Unknown agent: ${agentId}`);
     }
 
     return createAgent({
-      doc,
-      llm: this.llm,
-      tools: this.tools,
+      doc: entry.doc,
+      llm: entry.llm,
+      tools: entry.tools,
       context,
     });
+  }
+
+  restoreAgent(agentId: string, checkpoint: Checkpoint): AgentScriptAgent {
+    const entry = this.entries.get(agentId);
+    if (!entry) {
+      throw new Error(`Unknown agent: ${agentId}`);
+    }
+    return AgentScriptAgent.fromCheckpoint(
+      { doc: entry.doc, llm: entry.llm, tools: entry.tools },
+      checkpoint
+    );
   }
 }
 

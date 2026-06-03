@@ -108,20 +108,69 @@ describe('AgentRegistry — deployment-driven LLM', () => {
     );
   });
 
-  it('rejects mismatched deployment.llm across multiple .agent files', async () => {
+  it('loads agents declaring different LLM providers independently', async () => {
     await writeFile(path.join(dir, 'a.agent'), agentWithDeployment, 'utf8');
-    const conflicting = agentWithDeployment.replace(
-      'provider: "anthropic"',
-      'provider: "openai"'
-    );
-    await writeFile(path.join(dir, 'b.agent'), conflicting, 'utf8');
-    process.env.ANTHROPIC_API_KEY = 'sk';
+    const otherProvider = agentWithDeployment
+      .replace('agent_name: "TestBot"', 'agent_name: "OtherBot"')
+      .replace('provider: "anthropic"', 'provider: "openai"')
+      .replace('claude-opus-4-5', 'gpt-4o-mini')
+      .replace('env(ANTHROPIC_API_KEY)', 'env(OPENAI_API_KEY)');
+    await writeFile(path.join(dir, 'b.agent'), otherProvider, 'utf8');
+    process.env.ANTHROPIC_API_KEY = 'sk-ant';
+    process.env.OPENAI_API_KEY = 'sk-oai';
     try {
-      await expect(AgentRegistry.load(baseConfig(dir))).rejects.toThrow(
-        /disagree/
-      );
+      const reg = await AgentRegistry.load(baseConfig(dir));
+      expect(reg.listAgents()).toEqual(['a', 'b']);
+      expect(() => reg.createAgent('a')).not.toThrow();
+      expect(() => reg.createAgent('b')).not.toThrow();
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+    }
+  });
+
+  it('isolates per-agent MCP adapters: an agent without deployment.mcp has no mcp scheme', async () => {
+    const withMcp = `
+config:
+    agent_name: "WithMcp"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        gh:
+            transport: "http"
+            url: "https://mcp.github.example"
+
+start_agent main:
+    description: "Test"
+    reasoning:
+        instructions: ->
+            | hello
+`;
+    await writeFile(path.join(dir, 'with.agent'), withMcp, 'utf8');
+    await writeFile(
+      path.join(dir, 'without.agent'),
+      agentWithoutDeployment,
+      'utf8'
+    );
+    process.env.OPENAI_API_KEY = 'sk-oai';
+    try {
+      const reg = await AgentRegistry.load({
+        ...baseConfig(dir),
+        llmBaseUrl: 'https://api.openai.com/v1',
+        llmApiKey: 'sk-fallback',
+        llmModel: 'gpt-4o-mini',
+      });
+      expect(reg.listAgents()).toEqual(['with', 'without']);
+      const withAgent = reg.createAgent('with');
+      const withoutAgent = reg.createAgent('without');
+      expect(withAgent).toBeDefined();
+      expect(withoutAgent).toBeDefined();
+    } finally {
+      delete process.env.OPENAI_API_KEY;
     }
   });
 });

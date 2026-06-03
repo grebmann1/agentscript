@@ -5,6 +5,7 @@ import type { AgentRegistry } from '../agents.js';
 import { SessionService } from '../sessions.js';
 import { serializeStreamChunk } from '../sse.js';
 import { RuntimePolicy } from '../runtime-policy.js';
+import { createPerIpRateLimit } from '../rate-limit.js';
 import {
   streamPartToChunk,
   toSendMessageResponse,
@@ -22,16 +23,32 @@ interface CreateAgentApiRouterOptions {
   agents: AgentRegistry;
   sessions: SessionService;
   runtimePolicy: RuntimePolicy;
+  rateLimitSessionsPerHour?: number;
+  rateLimitMessagesPerHour?: number;
 }
+
+const HOUR_MS = 60 * 60 * 1000;
 
 export function createAgentApiRouter({
   agents,
   sessions,
   runtimePolicy,
+  rateLimitSessionsPerHour = 10,
+  rateLimitMessagesPerHour = 50,
 }: CreateAgentApiRouterOptions) {
   const router = new Hono();
+  const sessionsLimiter = createPerIpRateLimit({
+    windowMs: HOUR_MS,
+    max: rateLimitSessionsPerHour,
+    label: 'sessions',
+  });
+  const messagesLimiter = createPerIpRateLimit({
+    windowMs: HOUR_MS,
+    max: rateLimitMessagesPerHour,
+    label: 'messages',
+  });
 
-  router.post('/agents/:agentId/sessions', async c => {
+  router.post('/agents/:agentId/sessions', sessionsLimiter, async c => {
     const body = await parseJson<StartSessionRequest>(c);
     const agentId = c.req.param('agentId');
 
@@ -76,7 +93,7 @@ export function createAgentApiRouter({
     return c.body(null, 204);
   });
 
-  router.post('/sessions/:sessionId/messages', async c => {
+  router.post('/sessions/:sessionId/messages', messagesLimiter, async c => {
     const body = await parseJson<SendMessageRequest>(c);
     const text = body?.message?.text;
     const sequenceId = body?.message?.sequenceId;
@@ -119,67 +136,74 @@ export function createAgentApiRouter({
     }
   });
 
-  router.post('/sessions/:sessionId/messages/stream', async c => {
-    const body = await parseJson<SendMessageRequest>(c);
-    const text = body?.message?.text;
-    const sequenceId = body?.message?.sequenceId;
-    if (!text || typeof text !== 'string') {
-      return c.json(toError('INVALID_INPUT', 'message.text is required'), 400);
-    }
-    if (typeof sequenceId !== 'number') {
-      return c.json(
-        toError('INVALID_INPUT', 'message.sequenceId is required'),
-        400
-      );
-    }
-
-    let activeTurn;
-    try {
-      activeTurn = await sessions.beginTurn(c.req.param('sessionId'));
-    } catch (error) {
-      const message = toErrorMessage(error);
-      const code = message.includes('busy') ? 409 : 404;
-      return c.json(toError('SESSION_UNAVAILABLE', message), code);
-    }
-
-    const messageId = randomUUID();
-    return streamSSE(c, async stream => {
-      try {
-        const run = runtimePolicy.stream(
-          activeTurn.agent,
-          text,
-          activeTurn.signal
+  router.post(
+    '/sessions/:sessionId/messages/stream',
+    messagesLimiter,
+    async c => {
+      const body = await parseJson<SendMessageRequest>(c);
+      const text = body?.message?.text;
+      const sequenceId = body?.message?.sequenceId;
+      if (!text || typeof text !== 'string') {
+        return c.json(
+          toError('INVALID_INPUT', 'message.text is required'),
+          400
         );
-        for await (const part of run.fullStream) {
-          const chunk = streamPartToChunk({
-            sessionId: activeTurn.session.sessionId,
-            sequenceId,
-            part,
-            messageId,
-          });
-          if (!chunk) continue;
-          await stream.writeSSE({
-            event: chunk.chunkType,
-            data: serializeStreamChunk(chunk),
-          });
-        }
-        await run.result;
-      } catch (error) {
-        await stream.writeSSE({
-          event: 'Error',
-          data: serializeStreamChunk({
-            chunkType: 'Error',
-            sessionId: activeTurn.session.sessionId,
-            sequenceId,
-            messageId,
-            error: toErrorMessage(error),
-          }),
-        });
-      } finally {
-        activeTurn.done();
       }
-    });
-  });
+      if (typeof sequenceId !== 'number') {
+        return c.json(
+          toError('INVALID_INPUT', 'message.sequenceId is required'),
+          400
+        );
+      }
+
+      let activeTurn;
+      try {
+        activeTurn = await sessions.beginTurn(c.req.param('sessionId'));
+      } catch (error) {
+        const message = toErrorMessage(error);
+        const code = message.includes('busy') ? 409 : 404;
+        return c.json(toError('SESSION_UNAVAILABLE', message), code);
+      }
+
+      const messageId = randomUUID();
+      return streamSSE(c, async stream => {
+        try {
+          const run = runtimePolicy.stream(
+            activeTurn.agent,
+            text,
+            activeTurn.signal
+          );
+          for await (const part of run.fullStream) {
+            const chunk = streamPartToChunk({
+              sessionId: activeTurn.session.sessionId,
+              sequenceId,
+              part,
+              messageId,
+            });
+            if (!chunk) continue;
+            await stream.writeSSE({
+              event: chunk.chunkType,
+              data: serializeStreamChunk(chunk),
+            });
+          }
+          await run.result;
+        } catch (error) {
+          await stream.writeSSE({
+            event: 'Error',
+            data: serializeStreamChunk({
+              chunkType: 'Error',
+              sessionId: activeTurn.session.sessionId,
+              sequenceId,
+              messageId,
+              error: toErrorMessage(error),
+            }),
+          });
+        } finally {
+          activeTurn.done();
+        }
+      });
+    }
+  );
 
   router.post('/sessions/:sessionId/messages/:messageId/feedback', async c => {
     const body = await parseJson<SubmitFeedbackRequest>(c);

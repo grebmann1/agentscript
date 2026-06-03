@@ -10,7 +10,6 @@ import type { LlmConfig } from '@agentscript/compiler';
 import {
   createLlmOptionsFromDeployment,
   createLlmOptionsFromServerConfig,
-  reconcileDeploymentLlm,
 } from '../src/llm-factory.js';
 import type { ServerConfig } from '../src/types.js';
 
@@ -118,54 +117,5 @@ describe('createLlmOptionsFromServerConfig', () => {
       llmModel: 'gpt-4o-mini',
     });
     expect(opts.model).toBeDefined();
-  });
-});
-
-describe('reconcileDeploymentLlm', () => {
-  const llmA: LlmConfig = {
-    provider: 'anthropic',
-    model: 'm',
-    api_key: { kind: 'env', name: 'A' },
-  };
-  const llmB: LlmConfig = {
-    provider: 'openai',
-    model: 'm',
-    api_key: { kind: 'env', name: 'B' },
-  };
-
-  it('returns undefined when no agent declares llm', () => {
-    expect(
-      reconcileDeploymentLlm([
-        { id: 'a', llm: undefined },
-        { id: 'b', llm: undefined },
-      ])
-    ).toBeUndefined();
-  });
-
-  it('returns the shared llm config when all agree', () => {
-    expect(
-      reconcileDeploymentLlm([
-        { id: 'a', llm: llmA },
-        { id: 'b', llm: llmA },
-      ])
-    ).toEqual(llmA);
-  });
-
-  it('accepts a mix of declared and undeclared (declared wins)', () => {
-    expect(
-      reconcileDeploymentLlm([
-        { id: 'a', llm: llmA },
-        { id: 'b', llm: undefined },
-      ])
-    ).toEqual(llmA);
-  });
-
-  it('throws when agents disagree', () => {
-    expect(() =>
-      reconcileDeploymentLlm([
-        { id: 'a', llm: llmA },
-        { id: 'b', llm: llmB },
-      ])
-    ).toThrow(/disagree/);
   });
 });

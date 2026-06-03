@@ -15,7 +15,16 @@ import {
 } from './middleware.js';
 import { RuntimePolicy } from './runtime-policy.js';
 
-const DEMO_AGENT_ID = process.env.DEMO_AGENT_ID ?? 'travel_booking_demo';
+const DEMO_AGENT_IDS = (
+  process.env.DEMO_AGENT_IDS ??
+  process.env.DEMO_AGENT_ID ??
+  'travel_booking_demo'
+)
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+const isDemoAgent = (id: string): boolean => DEMO_AGENT_IDS.includes(id);
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -57,6 +66,8 @@ export function createApp({
     agents,
     sessions,
     runtimePolicy,
+    rateLimitSessionsPerHour: middlewareConfig.rateLimitSessionsPerHour,
+    rateLimitMessagesPerHour: middlewareConfig.rateLimitMessagesPerHour,
   });
   app.use('*', requestContextMiddleware());
   app.use('*', loggingMiddleware());
@@ -95,14 +106,17 @@ export function createApp({
   // try it without configuring tokens. Production MCP traffic should hit a
   // separately-deployed MCP server with its own auth posture.
   app.route('/mcp', createEmbeddedMcpRouter());
-  app.post('/demo/agent/session', async c => {
+  const handleDemoSessionCreate = async (c: Context, agentId: string) => {
+    if (!isDemoAgent(agentId)) {
+      return c.json({ error: `Unknown demo agent: ${agentId}` }, 403);
+    }
     try {
       const body = await parseJson<{ context?: Record<string, unknown> }>(c);
-      const session = await sessions.create(DEMO_AGENT_ID, body?.context);
+      const session = await sessions.create(agentId, body?.context);
       return c.json(
         {
           sessionId: session.sessionId,
-          agentId: DEMO_AGENT_ID,
+          agentId,
           status: 'ready',
           createdAt: session.createdAt,
         },
@@ -111,20 +125,37 @@ export function createApp({
     } catch (error) {
       return c.json({ error: toErrorMessage(error) }, 400);
     }
-  });
-  app.post('/demo/agent/session/:sessionId/message', async c => {
+  };
+
+  const handleDemoMessage = async (
+    c: Context,
+    expectedAgentId: string | null
+  ) => {
     const body = await parseJson<{ text?: string }>(c);
     const text = body?.text?.trim();
     if (!text) {
       return c.json({ error: 'text is required' }, 400);
     }
+    if (expectedAgentId && !isDemoAgent(expectedAgentId)) {
+      return c.json({ error: `Unknown demo agent: ${expectedAgentId}` }, 403);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    if (!sessionId) {
+      return c.json({ error: 'sessionId is required' }, 400);
+    }
 
     let activeTurn;
     try {
-      activeTurn = await sessions.beginTurn(c.req.param('sessionId'));
-      if (activeTurn.session.agentId !== DEMO_AGENT_ID) {
+      activeTurn = await sessions.beginTurn(sessionId);
+      const sessionAgentId = activeTurn.session.agentId;
+      if (!isDemoAgent(sessionAgentId)) {
         activeTurn.done();
         return c.json({ error: 'Session is not a demo session' }, 403);
+      }
+      if (expectedAgentId && sessionAgentId !== expectedAgentId) {
+        activeTurn.done();
+        return c.json({ error: 'Session does not belong to this agent' }, 403);
       }
     } catch (error) {
       const message = toErrorMessage(error);
@@ -147,20 +178,37 @@ export function createApp({
     } finally {
       activeTurn.done();
     }
-  });
-  app.post('/demo/agent/session/:sessionId/message/stream', async c => {
+  };
+
+  const handleDemoStream = async (
+    c: Context,
+    expectedAgentId: string | null
+  ) => {
     const body = await parseJson<{ text?: string }>(c);
     const text = body?.text?.trim();
     if (!text) {
       return c.json({ error: 'text is required' }, 400);
     }
+    if (expectedAgentId && !isDemoAgent(expectedAgentId)) {
+      return c.json({ error: `Unknown demo agent: ${expectedAgentId}` }, 403);
+    }
+
+    const sessionId = c.req.param('sessionId');
+    if (!sessionId) {
+      return c.json({ error: 'sessionId is required' }, 400);
+    }
 
     let activeTurn;
     try {
-      activeTurn = await sessions.beginTurn(c.req.param('sessionId'));
-      if (activeTurn.session.agentId !== DEMO_AGENT_ID) {
+      activeTurn = await sessions.beginTurn(sessionId);
+      const sessionAgentId = activeTurn.session.agentId;
+      if (!isDemoAgent(sessionAgentId)) {
         activeTurn.done();
         return c.json({ error: 'Session is not a demo session' }, 403);
+      }
+      if (expectedAgentId && sessionAgentId !== expectedAgentId) {
+        activeTurn.done();
+        return c.json({ error: 'Session does not belong to this agent' }, 403);
       }
     } catch (error) {
       const message = toErrorMessage(error);
@@ -229,19 +277,61 @@ export function createApp({
         activeTurn.done();
       }
     });
-  });
-  app.delete('/demo/agent/session/:sessionId', async c => {
+  };
+
+  const handleDemoDelete = async (
+    c: Context,
+    expectedAgentId: string | null
+  ) => {
+    if (expectedAgentId && !isDemoAgent(expectedAgentId)) {
+      return c.json({ error: `Unknown demo agent: ${expectedAgentId}` }, 403);
+    }
     const sessionId = c.req.param('sessionId');
+    if (!sessionId) {
+      return c.json({ error: 'sessionId is required' }, 400);
+    }
     const session = await sessions.get(sessionId);
     if (!session) {
       return c.json({ error: 'Session not found' }, 404);
     }
-    if (session.agentId !== DEMO_AGENT_ID) {
+    if (!isDemoAgent(session.agentId)) {
       return c.json({ error: 'Session is not a demo session' }, 403);
+    }
+    if (expectedAgentId && session.agentId !== expectedAgentId) {
+      return c.json({ error: 'Session does not belong to this agent' }, 403);
     }
     await sessions.delete(sessionId);
     return c.json({ ended: true, sessionId });
-  });
+  };
+
+  // Path-parametrized demo routes — agent picked via :agentId, validated
+  // against DEMO_AGENT_IDS allowlist.
+  app.post('/demo/agents/:agentId/session', c =>
+    handleDemoSessionCreate(c, c.req.param('agentId') ?? '')
+  );
+  app.post('/demo/agents/:agentId/session/:sessionId/message', c =>
+    handleDemoMessage(c, c.req.param('agentId') ?? '')
+  );
+  app.post('/demo/agents/:agentId/session/:sessionId/message/stream', c =>
+    handleDemoStream(c, c.req.param('agentId') ?? '')
+  );
+  app.delete('/demo/agents/:agentId/session/:sessionId', c =>
+    handleDemoDelete(c, c.req.param('agentId') ?? '')
+  );
+
+  // Legacy single-agent routes — pinned to DEMO_AGENT_IDS[0]. Kept for
+  // backward compatibility with older OSS site builds.
+  const defaultDemoAgent = DEMO_AGENT_IDS[0] ?? 'travel_booking_demo';
+  app.post('/demo/agent/session', c =>
+    handleDemoSessionCreate(c, defaultDemoAgent)
+  );
+  app.post('/demo/agent/session/:sessionId/message', c =>
+    handleDemoMessage(c, null)
+  );
+  app.post('/demo/agent/session/:sessionId/message/stream', c =>
+    handleDemoStream(c, null)
+  );
+  app.delete('/demo/agent/session/:sessionId', c => handleDemoDelete(c, null));
 
   app.get('/v1/agents', c => {
     c.header('x-api-deprecated', 'true');
@@ -384,6 +474,7 @@ async function serveStaticPath(
 ): Promise<Response | null> {
   if (
     pathname.startsWith('/demo/agent/') ||
+    pathname.startsWith('/demo/agents/') ||
     pathname.startsWith('/v1/') ||
     pathname.startsWith('/einstein/ai-agent/v1/') ||
     pathname === '/mcp' ||

@@ -6,14 +6,17 @@ export interface ServerConfig {
   agentsDir: string;
   sessionTtlMs: number;
   maxSessions: number;
-  sessionStoreBackend: 'memory' | 'postgres';
+  sessionStoreBackend: 'memory' | 'fs' | 'postgres';
   postgresUrl?: string;
+  sessionStoreDir?: string;
   authTokens: string[];
   mcpAuthTokens: string[];
   corsAllowedOrigins: string[];
   maxRequestBytes: number;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  rateLimitSessionsPerHour: number;
+  rateLimitMessagesPerHour: number;
   turnTimeoutMs: number;
   llmCircuitFailures: number;
   llmCircuitOpenMs: number;

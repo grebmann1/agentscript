@@ -62,10 +62,12 @@ describe('embedded MCP server', () => {
     );
   });
 
-  it('lists the three demo tools', async () => {
+  it('lists the demo tools', async () => {
     const tools = await adapter.listTools('demo');
     expect(tools.map(t => t.name).sort()).toEqual([
       'book_trip',
+      'get_order_tracking',
+      'lookup_order',
       'search_flights',
       'search_hotels',
     ]);
@@ -165,6 +167,52 @@ describe('embedded MCP server', () => {
       const textParts = content.filter(p => p.type === 'text');
       expect(textParts.length).toBe(1);
       expect(JSON.parse(textParts[0].text!)).toEqual(raw.structuredContent);
+    });
+
+    it('lookup_order returns the seeded ORD-42 record with a tracking number', async () => {
+      const raw = await rawClient.callTool({
+        name: 'lookup_order',
+        arguments: { order_number: 'ORD-42' },
+      });
+      expect(raw.isError).toBeFalsy();
+      expect(raw.structuredContent).toMatchObject({
+        found: true,
+        order_id: 'ORD-42',
+        status: 'shipped',
+        tracking_number: '1Z-DEMO-42',
+        total_usd: expect.any(Number),
+      });
+    });
+
+    it('lookup_order returns found:false for unknown order numbers', async () => {
+      const raw = await rawClient.callTool({
+        name: 'lookup_order',
+        arguments: { order_number: 'ORD-NOPE' },
+      });
+      expect(raw.isError).toBeFalsy();
+      expect(raw.structuredContent).toMatchObject({
+        found: false,
+        order_id: 'ORD-NOPE',
+        status: 'not_found',
+      });
+    });
+
+    it('get_order_tracking returns a multi-event history for the seeded number', async () => {
+      const raw = await rawClient.callTool({
+        name: 'get_order_tracking',
+        arguments: { tracking_number: '1Z-DEMO-42' },
+      });
+      expect(raw.isError).toBeFalsy();
+      expect(raw.structuredContent).toMatchObject({
+        found: true,
+        carrier: 'AgentExpress',
+        last_location: 'Reno, NV',
+        history: expect.any(Array),
+      });
+      const structured = raw.structuredContent as {
+        history: Array<{ at: string; location: string; description: string }>;
+      };
+      expect(structured.history.length).toBeGreaterThan(0);
     });
 
     it('book_trip error returns both structuredContent and a JSON text fallback', async () => {

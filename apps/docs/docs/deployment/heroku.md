@@ -55,7 +55,9 @@ start_agent main:
             | You are a friendly support agent. Greet the user warmly.
 ```
 
-Multi-agent repos are supported too — drop several files under `agents/`:
+Multi-agent repos are supported too — drop several files under `agents/`.
+Each agent's `deployment:` block is independent: agents may use different LLM
+providers and different MCP servers without coordinating.
 
 ```
 my-agent/

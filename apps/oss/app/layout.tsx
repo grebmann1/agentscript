@@ -36,7 +36,10 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
         />
         <Script id="demo-api-base" strategy="beforeInteractive">
-          {`window.AGENTSCRIPT_DEMO_API_BASE = 'https://agentscript-runner-demo-43272b107f3c.herokuapp.com';`}
+          {`window.AGENTSCRIPT_DEMO_API_BASE = '${
+            process.env.NEXT_PUBLIC_DEMO_API_BASE ??
+            'https://agentscript-runner-demo-43272b107f3c.herokuapp.com'
+          }';`}
         </Script>
       </head>
       <body>

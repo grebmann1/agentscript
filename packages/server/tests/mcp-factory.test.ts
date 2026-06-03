@@ -8,10 +8,7 @@
 import { createServer, type Server } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import type { McpServerConfig } from '@agentscript/compiler';
-import {
-  createMcpAdapter,
-  reconcileDeploymentMcp,
-} from '../src/mcp-factory.js';
+import { createMcpAdapter } from '../src/mcp-factory.js';
 
 /**
  * Minimal MCP-shaped server that captures the `authorization` header from
@@ -364,97 +361,5 @@ describe('createMcpAdapter', () => {
     } finally {
       await mock.stop();
     }
-  });
-});
-
-describe('reconcileDeploymentMcp', () => {
-  const gh: McpServerConfig = {
-    transport: 'http',
-    url: 'https://mcp.github.example',
-  };
-  const slack: McpServerConfig = {
-    transport: 'http',
-    url: 'https://mcp.slack.example',
-  };
-  const ghVariant: McpServerConfig = {
-    transport: 'http',
-    url: 'https://mcp.github.example',
-    headers: { extra: 'yes' },
-  };
-
-  it('returns undefined when no agent declares mcp', () => {
-    expect(
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: undefined },
-        { id: 'b', mcp: undefined },
-      ])
-    ).toBeUndefined();
-  });
-
-  it('unions distinct server names across agents', () => {
-    expect(
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: { gh } },
-        { id: 'b', mcp: { slack } },
-      ])
-    ).toEqual({ gh, slack });
-  });
-
-  it('accepts identical re-declarations of the same server', () => {
-    expect(
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: { gh } },
-        { id: 'b', mcp: { gh } },
-      ])
-    ).toEqual({ gh });
-  });
-
-  it('throws when two agents declare the same server name with different config', () => {
-    expect(() =>
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: { gh } },
-        { id: 'b', mcp: { gh: ghVariant } },
-      ])
-    ).toThrow(/disagree/);
-  });
-
-  it('treats configs with reordered keys as identical', () => {
-    // Same content, reversed key order. JSON.stringify would be order-sensitive
-    // and trigger a spurious `disagree` — the canonical comparison must not.
-    const ordered: McpServerConfig = {
-      transport: 'http',
-      url: 'https://mcp.example',
-      headers: { 'x-trace': 'on' },
-    };
-    const reordered: McpServerConfig = {
-      headers: { 'x-trace': 'on' },
-      url: 'https://mcp.example',
-      transport: 'http',
-    };
-    expect(
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: { gh: ordered } },
-        { id: 'b', mcp: { gh: reordered } },
-      ])
-    ).toEqual({ gh: ordered });
-  });
-
-  it('throws when only a nested auth.key differs', () => {
-    const withKeyA: McpServerConfig = {
-      transport: 'http',
-      url: 'https://mcp.example',
-      auth: { strategy: 'api_key', key: 'key-a' },
-    };
-    const withKeyB: McpServerConfig = {
-      transport: 'http',
-      url: 'https://mcp.example',
-      auth: { strategy: 'api_key', key: 'key-b' },
-    };
-    expect(() =>
-      reconcileDeploymentMcp([
-        { id: 'a', mcp: { gh: withKeyA } },
-        { id: 'b', mcp: { gh: withKeyB } },
-      ])
-    ).toThrow(/disagree/);
   });
 });
