@@ -1,0 +1,25 @@
+# AgentScript OSS docs
+
+AgentScript compiles a `.agent` file into an IR and runs it through a small
+JavaScript runtime. Author the agent once, then deploy it however you like:
+as a standalone Heroku app or embedded inside an existing Node/Next.js
+process.
+
+## Deployment
+
+- [Overview](/docs/deployment) — pick a path.
+- [Deploy to Heroku](/docs/deployment/heroku-script) — `pnpm add
+  @agentscript/server`, drop in a `Procfile`, `git push heroku main`.
+- [Embed via the SDK](/docs/deployment/sdk) — `pnpm add
+  @agentscript/runtime-vercel` and run the agent inside any Node or Next.js
+  route.
+
+## Packages
+
+| Package | Purpose |
+| --- | --- |
+| `@agentscript/server` | Standalone HTTP server. Loads `.agent` files at boot, exposes Einstein-compatible session endpoints, optional `/mcp` bearer gate. |
+| `@agentscript/runtime` | The IR executor. Tool registry, session state, LLM driver interface. |
+| `@agentscript/runtime-vercel` | Vercel AI SDK bridge. Wraps `generateText` as an `LlmDriver`; re-exports `compileSource` and `createAgent`. |
+| `@agentscript/compiler` | `.agent` → IR. Used by the runtime; reach for it directly only when you need a non-default dialect. |
+| `@agentscript/cli` | `agentscript build` — scaffolds a deploy-ready folder from one or more `.agent` files. |

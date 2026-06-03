@@ -1,0 +1,222 @@
+# Deploy to Heroku
+
+`@agentscript/server` is a published npm package. Install it, point it at a
+folder of `.agent` files, drop in a `Procfile`, and `git push heroku main`.
+Heroku's standard `heroku/nodejs` buildpack handles the rest.
+
+## When to reach for it
+
+- The agent is the whole product — you want a standalone HTTP service, not a
+  feature inside an existing app.
+- You want session endpoints (`/sessions`, `/messages`) and optional `/mcp`
+  out of the box.
+- You'd rather not write your own route plumbing.
+
+If you'd rather embed the agent in a Node/Next.js process you already run,
+see [Embed via the SDK](/docs/deployment/sdk).
+
+## Project layout
+
+A minimal deployable repo is three files plus an agent:
+
+```bash
+my-agent/
+├── package.json
+├── Procfile
+└── agents/
+    └── travel.agent
+```
+
+`package.json`:
+
+```json
+{
+  "name": "my-agent",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "@agentscript/server": "^2.0.0"
+  },
+  "scripts": {
+    "start": "agentscript-server"
+  }
+}
+```
+
+`Procfile`:
+
+```yaml
+web: AGENTS_DIR=./agents agentscript-server
+```
+
+`agents/travel.agent` — your agent source. The Agentforce dialect declares
+the agent's system prompt, deployment (LLM + MCP), variables, and a
+`start_agent` block of typed actions:
+
+```agent
+system:
+    instructions: "You are a friendly travel-booking assistant. Help the user search for flights, find hotels, and book trips."
+    messages:
+        welcome: "Hi! I can help you plan a trip — search flights and hotels, then book them."
+
+config:
+    agent_name: "TravelBookingAgent"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+    mcp:
+        demo:
+            transport: "streamable-http"
+            url: "env(MCP_INTERNAL_URL)"
+            auth:
+                strategy: "bearer"
+                key: "env(MCP_INTERNAL_TOKEN)"
+
+variables:
+    last_confirmation: mutable string = ""
+        description: "Confirmation number from the most recent booking"
+
+start_agent travel_assistant:
+    description: "Search and book flights and hotels via the embedded MCP server"
+    actions:
+        Search_Flights:
+            description: "Find flights between two cities on a given date"
+            inputs:
+                origin: string
+                    is_required: True
+                destination: string
+                    is_required: True
+                depart_date: string
+                    is_required: True
+            outputs:
+                flights: string
+                count: number
+            target: "mcp://demo/search_flights"
+
+        Book_Trip:
+            description: "Book a flight and/or hotel for a traveler"
+            inputs:
+                traveler_name: string
+                    is_required: True
+                flight_id: string
+            outputs:
+                confirmation_number: string
+                booked: boolean
+            target: "mcp://demo/book_trip"
+
+    reasoning:
+        instructions: ->
+            |   1. Search flights with {!@actions.find_flights} once you have origin, destination, date.
+            |   2. Once the user picks a flight_id, book with {!@actions.book}.
+        actions:
+            find_flights: @actions.Search_Flights
+                with origin=...
+                with destination=...
+                with depart_date=...
+
+            book: @actions.Book_Trip
+                with traveler_name=...
+                with flight_id=...
+                set @variables.last_confirmation = @outputs.confirmation_number
+```
+
+The full version of this agent — with `Search_Hotels`, more variables, and
+the complete reasoning block — ships as
+[`packages/server/agents/mcp_demo.agent`](https://github.com/salesforce/agentscript/blob/main/packages/server/agents/mcp_demo.agent)
+in the repo and powers the live demo on the home page.
+
+## Install and deploy
+
+From the repo root:
+
+```bash
+pnpm add @agentscript/server
+heroku create my-agent
+heroku config:set OPENAI_API_KEY=sk-…
+git push heroku main
+```
+
+Heroku runs `pnpm install` + the `start` script. The server reads
+`AGENTS_DIR`, loads each `.agent` file, and starts listening on `$PORT`.
+
+## Required Heroku config vars
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | yes | Provider key for the LLM. Swap for `ANTHROPIC_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` if your `.agent` declares a different model. |
+| `AGENTS_DIR` | recommended | Folder the server scans for `.agent` files. Defaults to `./agents`. |
+| `MCP_AUTH_TOKENS` | optional | Comma-separated bearer tokens. Required only if exposing `/mcp` to external clients. |
+| `CORS_ALLOWED_ORIGINS` | optional | Comma-separated origins; required if a browser will call this app. |
+
+Set them with `heroku config:set`:
+
+```bash
+heroku config:set OPENAI_API_KEY=sk-… MCP_AUTH_TOKENS=$(openssl rand -hex 16)
+```
+
+## Endpoints
+
+Once deployed, the server exposes:
+
+| Path | Method | Purpose |
+| --- | --- | --- |
+| `/einstein/ai-agent/v1/agents/<id>/sessions` | `POST` | Start a session for the named agent. Returns a `sessionId`. |
+| `/einstein/ai-agent/v1/sessions/<sessionId>/messages` | `POST` | Send a message; receive an SSE stream of typed parts. |
+| `/mcp` | `POST` | MCP endpoint (bearer-gated when `MCP_AUTH_TOKENS` is set). Tools declared inline in the `.agent` file appear here. |
+
+The agent id (`<id>` above) is the agent name declared in the `.agent` file
+header.
+
+## Multiple agents in one app
+
+Drop more files into `AGENTS_DIR` and they each become reachable under their
+own id:
+
+```bash
+agents/
+├── support.agent      # /einstein/ai-agent/v1/agents/support/sessions
+└── billing.agent      # /einstein/ai-agent/v1/agents/billing/sessions
+```
+
+No code changes — the server scans `AGENTS_DIR` at boot.
+
+## MCP bearer-gate
+
+If your agent declares an embedded MCP server, the routing layer enforces a
+bearer gate when `MCP_AUTH_TOKENS` is set. The server forwards
+`MCP_AUTH_TOKENS[0]` into `MCP_INTERNAL_TOKEN` automatically so internal
+self-loops (an agent calling its own MCP tools) work without extra config.
+
+```bash
+heroku config:set MCP_AUTH_TOKENS=$(openssl rand -hex 16) -a my-agent
+```
+
+## Smoke test
+
+`@agentscript/server` ships a smoke-test script that probes the 401 path,
+connects with a bearer, lists tools, and calls each one:
+
+```bash
+MCP_AUTH_TOKEN=… node node_modules/@agentscript/server/scripts/smoke-mcp-remote.mjs https://my-agent.herokuapp.com
+```
+
+Expected output:
+
+```bash
+✓ /mcp rejects unauthenticated request (401)
+✓ connected to https://…/mcp (with bearer)
+✓ tools/list returned N tools with annotations + outputSchemas
+✓ each declared tool returns a valid result
+
+✅ Live MCP smoke passed
+```
+
+## Where to go next
+
+For embedding the agent inside an existing Node/Next.js app instead of
+running a standalone server, see [Embed via the SDK](/docs/deployment/sdk).
+The packages reference is on the [docs landing page](/docs).

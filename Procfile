@@ -1,1 +1,1 @@
-web: STATIC_DIR=./dist-static node packages/server/dist/index.js
+web: node apps/oss/.next/standalone/apps/oss/server.js

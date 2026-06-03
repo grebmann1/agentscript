@@ -1,0 +1,27 @@
+# Deployment
+
+AgentScript runs the same compiled IR everywhere. What changes between
+deploy targets is the host process and how `.agent` source gets onto it. Two
+flows are documented here, with sharply different operational profiles.
+
+## Pick a path
+
+| Path | Best when… |
+| --- | --- |
+| [Deploy to Heroku](/docs/deployment/heroku-script) | You want a standalone agent service. `pnpm add @agentscript/server`, drop in a `Procfile`, `git push heroku main`. The server loads `.agent` files at boot and exposes session endpoints + optional MCP. |
+| [Embed via the SDK](/docs/deployment/sdk) | You already run a Node/Next.js app and want the agent inside an existing route. `@agentscript/runtime-vercel` bridges the Vercel AI SDK and runs the agent inside any App Router route handler — full streaming, no separate server. |
+
+## Same runtime, different host
+
+The `.agent` source, the tool registry, and the compiled IR are
+byte-identical across both paths. What differs:
+
+- **Heroku** — the host is `@agentscript/server`. You get `/sessions`,
+  `/messages`, optional `/mcp` for free. One config var per provider key.
+- **SDK** — the host is *your* Node/Next.js process. There is no separate
+  server. `createAgent` returns an object with a `stream(text)` method that
+  you wire into a route handler.
+
+If you're not sure which to start with: reach for **Heroku** when the agent
+is the whole product, and reach for the **SDK** when you want the agent
+*inside* an app you already deploy.

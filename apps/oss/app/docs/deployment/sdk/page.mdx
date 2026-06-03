@@ -1,0 +1,214 @@
+# Embed via the SDK (Node + Vercel)
+
+`@agentscript/runtime-vercel` bridges the Vercel AI SDK and runs an agent
+inside any Node process — including a Next.js App Router route handler.
+Full streaming. Any AI SDK provider. No separate server.
+
+The runtime is a JavaScript library, not a service. It runs wherever Node
+runs. The same `.agent` file that powers a standalone
+[`@agentscript/server`](/docs/deployment/heroku-script) deploy runs inside a
+route here, with no second process.
+
+## When to reach for it
+
+- You already run a Node, Next.js, or other JS server and want the agent
+  inside it.
+- You need full control over routing, auth, persistence, and the response
+  shape (e.g. you stream over WebSockets or wrap the agent in your own
+  protocol).
+- You want to co-deploy with a Vercel-hosted Next.js app.
+
+If you want a standalone agent service instead, the
+[Heroku flow](/docs/deployment/heroku-script) is the simpler path.
+
+## Why the bridge works
+
+AgentScript compiles `.agent` source into an IR. The runtime executes that
+IR through an `LlmDriver` interface. `@agentscript/runtime-vercel` ships a
+driver that wraps the Vercel AI SDK's `generateText`, so any AI SDK provider
+(OpenAI, Anthropic, Google, …) becomes a valid LLM backend.
+
+## Install
+
+The runtime, the Vercel adapter, the AI SDK core, and a provider package:
+
+```bash
+pnpm add @agentscript/runtime @agentscript/runtime-vercel ai @ai-sdk/openai
+```
+
+`ai` is a peer dependency — bring whatever version you already have pinned
+in your Next.js app. Swap `@ai-sdk/openai` for `@ai-sdk/anthropic`,
+`@ai-sdk/google`, or any other AI SDK provider with no other code changes.
+
+## A streaming agent route, end to end
+
+One file under `app/api/agent/`. Compile the `.agent` source at module
+load, register tools, build the agent, then stream tokens out of the `POST`
+handler as a plain Web `ReadableStream`.
+
+```ts
+// app/api/agent/route.ts
+import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { ToolRegistry, FnAdapter } from '@agentscript/runtime';
+import { compileSource, createAgent } from '@agentscript/runtime-vercel';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+// Pin to Node — the parser depends on a native module.
+export const runtime = 'nodejs';
+
+const source = readFileSync(
+  join(process.cwd(), 'agents/travel.agent'),
+  'utf8'
+);
+const { output: doc } = compileSource(source);
+
+// The travel agent's actions resolve to `mcp://demo/*` targets, so its tools
+// come from an MCP transport rather than in-process functions. If your
+// agent declares `mcp://…` actions, register an MCP adapter instead.
+const tools = new ToolRegistry();
+// tools.register('mcp', new McpAdapter({ url: process.env.MCP_INTERNAL_URL }));
+
+const agent = createAgent({
+  doc,
+  llm: { model: openai('gpt-4o-mini'), generateText },
+  tools,
+});
+
+export async function POST(req: Request) {
+  const { message } = await req.json();
+  const stream = agent.stream(message);
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        for await (const chunk of stream.textStream) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      },
+    }),
+    { headers: { 'content-type': 'text/plain; charset=utf-8' } }
+  );
+}
+```
+
+Top-down: standard Next.js + AI SDK imports, then the AgentScript runtime +
+adapter. The `runtime = 'nodejs'` export opts the route out of the edge
+runtime (see the next section for why). `readFileSync` + `compileSource`
+run once at module load — Next.js caches the module across requests, so
+compilation is paid for once per cold start. The `ToolRegistry` binds tool
+URI schemes to adapters: `mcp://NAME/tool` resolves through an MCP adapter,
+`fn://NAME` through an in-process `FnAdapter`. `createAgent` stitches the
+compiled doc, the LLM driver, and the tool registry into a single agent.
+The `POST` handler reads a JSON body, kicks off `agent.stream(message)`,
+and pipes `textStream` chunks into a Web `ReadableStream` for the response.
+
+## Plain Node (no Next.js)
+
+The same shape works in any Node entry point. Replace the `Request`/
+`Response` plumbing with whatever framework you use:
+
+```ts
+import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { ToolRegistry } from '@agentscript/runtime';
+import { compileSource, createAgent } from '@agentscript/runtime-vercel';
+import { readFileSync } from 'node:fs';
+
+const { output: doc } = compileSource(
+  readFileSync('./agents/travel.agent', 'utf8')
+);
+
+const tools = new ToolRegistry();
+// tools.register('mcp', new McpAdapter({ url: process.env.MCP_INTERNAL_URL }));
+
+const agent = createAgent({
+  doc,
+  llm: { model: openai('gpt-4o-mini'), generateText },
+  tools,
+});
+
+const stream = agent.stream('Find flights from SF to NYC on 2026-07-04');
+for await (const chunk of stream.textStream) process.stdout.write(chunk);
+```
+
+For a long-running server, hold one `agent` per `.agent` file at module
+scope and call `agent.stream(text)` per request. The runtime is reentrant —
+each call gets its own session.
+
+## Two things to know up front
+
+Both bite at deploy time, not at write time. Read these before you push.
+
+### Edge runtime not yet supported
+
+The default Agentforce parser (`@agentscript/parser-tree-sitter`) compiles
+a native tree-sitter binding, which doesn't run in Vercel's edge runtime.
+Pin the route to `runtime: 'nodejs'` until an edge-safe parser ships. The
+`compileSource` re-export from `runtime-vercel` uses the Agentforce
+dialect's pure-Node parser path; do **not** import
+`@agentscript/parser-tree-sitter` directly from your route file.
+
+### No turnkey deploy
+
+Unlike `@agentscript/server`, this is a library integration. Vercel doesn't
+auto-detect `.agent` files, scaffold session endpoints, or boot a server for
+you. The route handler is your only entry point — wire your own streaming,
+error-handling, and auth as you would for any Next.js route.
+
+## Env vars on Vercel
+
+Provider keys live on Vercel, not in the agent. Set each one with
+`vercel env add` before the first deploy:
+
+```bash
+vercel env add OPENAI_API_KEY production
+# Optional: ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY for other providers
+```
+
+The AI SDK provider modules (`@ai-sdk/openai`, `@ai-sdk/anthropic`, …)
+read these from `process.env` automatically. The agent's own `deployment:`
+block, if present, is **ignored** in this flow — the AI SDK provider, not
+AgentScript, owns credentials when you embed via the SDK.
+
+## Beyond Agentforce
+
+`compileSource` is Agentforce-only. Other dialects compile through a
+different entry point but plug into the same runtime. For Agent Fabric or
+the AgentScript dialect, compile separately with `@agentscript/compiler`'s
+`compile()` and pass the resulting `AgentDSLAuthoring` straight to
+`createAgent({ doc })`. The runtime is dialect-agnostic — only the compile
+step changes. Everything else on this page (tool registry, streaming, env
+vars, the route handler) stays the same.
+
+## Stream part types
+
+`agent.stream(text)` returns both a `textStream` (text deltas only) and a
+`fullStream` of typed parts. The shape mirrors the Vercel AI SDK
+`streamText` idiom — switch on `part.type` exactly as you would there.
+
+| Type | Payload | AI SDK analog |
+| --- | --- | --- |
+| `start-step` | `{ node }` | `start-step` |
+| `finish-step` | `{ node, to? }` | `finish-step` |
+| `phase-start` | `{ node, phase }` | — |
+| `phase-end` | `{ node, phase }` | — |
+| `text-delta` | `{ text }` | `text-delta` |
+| `tool-call` | `{ toolName, args }` | `tool-call` |
+| `tool-result` | `{ toolName, result }` | `tool-result` |
+| `tool-error` | `{ toolName, error }` | `tool-error` |
+| `state-change` | `{ name, before, after }` | — |
+| `abort` | `{ reason? }` | `abort` |
+| `finish` | `{ finalNode, assistantText }` | `finish` |
+| `error` | `{ error }` | `error` |
+
+Phase parts (`phase-start`, `phase-end`) and `state-change` are
+AgentScript-specific — surface them in your UI for in-flight tool progress,
+or ignore them and stick to `textStream` for plain token output.
+
+## Where to go next
+
+For a standalone agent service instead of an in-process embed, see
+[Deploy to Heroku](/docs/deployment/heroku-script). Both ship the same
+compiled IR — only the host changes.

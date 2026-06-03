@@ -1,11 +1,28 @@
-async function requestJson(path, init) {
+export type StreamHandlers = {
+  onStatus?: (status: string) => void;
+  onDelta?: (delta: string, full: string) => void;
+  onDone?: (full: string) => void;
+  onError?: (message: string) => void;
+  signal?: AbortSignal;
+};
+
+declare global {
+  interface Window {
+    AGENTSCRIPT_DEMO_API_BASE?: string;
+  }
+}
+
+async function requestJson<T = unknown>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
   const bases = resolveApiBases();
-  let lastError;
+  let lastError: unknown;
 
   for (const base of bases) {
     const url = base ? `${base}${path}` : path;
     try {
-      return await requestJsonAtUrl(url, init);
+      return (await requestJsonAtUrl(url, init)) as T;
     } catch (error) {
       lastError = error;
     }
@@ -14,16 +31,22 @@ async function requestJson(path, init) {
   throw lastError ?? new Error(`Request failed for ${path}`);
 }
 
-export async function startDemoSession() {
-  const payload = await requestJson('/demo/agent/session', { method: 'POST' });
+export async function startDemoSession(): Promise<{ sessionId: string }> {
+  const payload = await requestJson<{ sessionId?: unknown }>(
+    '/demo/agent/session',
+    { method: 'POST' }
+  );
   if (!payload || typeof payload.sessionId !== 'string') {
     throw new Error('Demo API returned an invalid session payload.');
   }
-  return payload;
+  return { sessionId: payload.sessionId };
 }
 
-export async function sendDemoMessage(sessionId, text) {
-  const payload = await requestJson(
+export async function sendDemoMessage(
+  sessionId: string,
+  text: string
+): Promise<{ reply: string }> {
+  const payload = await requestJson<{ reply?: unknown }>(
     `/demo/agent/session/${encodeURIComponent(sessionId)}/message`,
     {
       method: 'POST',
@@ -33,13 +56,17 @@ export async function sendDemoMessage(sessionId, text) {
   if (!payload || typeof payload.reply !== 'string') {
     throw new Error('Demo API returned an invalid message payload.');
   }
-  return payload;
+  return { reply: payload.reply };
 }
 
-export async function streamDemoMessage(sessionId, text, handlers = {}) {
+export async function streamDemoMessage(
+  sessionId: string,
+  text: string,
+  handlers: StreamHandlers = {}
+): Promise<{ reply: string }> {
   const path = `/demo/agent/session/${encodeURIComponent(sessionId)}/message/stream`;
   const bases = resolveApiBases();
-  let lastError;
+  let lastError: unknown;
 
   for (const base of bases) {
     const url = base ? `${base}${path}` : path;
@@ -53,21 +80,21 @@ export async function streamDemoMessage(sessionId, text, handlers = {}) {
   throw lastError ?? new Error('Streaming request failed.');
 }
 
-export async function endDemoSession(sessionId) {
-  const payload = await requestJson(
+export async function endDemoSession(
+  sessionId: string
+): Promise<{ ended: true }> {
+  const payload = await requestJson<{ ended?: unknown }>(
     `/demo/agent/session/${encodeURIComponent(sessionId)}`,
-    {
-      method: 'DELETE',
-    }
+    { method: 'DELETE' }
   );
   if (!payload || payload.ended !== true) {
     throw new Error('Demo API returned an invalid session end payload.');
   }
-  return payload;
+  return { ended: true };
 }
 
-function resolveApiBases() {
-  const bases = [];
+function resolveApiBases(): string[] {
+  const bases: string[] = [];
   const globalBase =
     typeof window !== 'undefined' &&
     typeof window.AGENTSCRIPT_DEMO_API_BASE === 'string'
@@ -77,10 +104,8 @@ function resolveApiBases() {
     bases.push(globalBase.replace(/\/+$/, ''));
   }
 
-  // Default: same-origin, used in production/Heroku merged hosting.
   bases.push('');
 
-  // Local OSS dev fallback (site on :4321, API on :8080).
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
     const localhostLike = hostname === 'localhost' || hostname === '127.0.0.1';
@@ -92,7 +117,7 @@ function resolveApiBases() {
   return Array.from(new Set(bases));
 }
 
-async function requestJsonAtUrl(url, init) {
+async function requestJsonAtUrl(url: string, init?: RequestInit) {
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -102,7 +127,7 @@ async function requestJsonAtUrl(url, init) {
   });
 
   const raw = await response.text();
-  let payload;
+  let payload: unknown;
   try {
     payload = raw ? JSON.parse(raw) : undefined;
   } catch {
@@ -111,8 +136,8 @@ async function requestJsonAtUrl(url, init) {
 
   if (!response.ok) {
     const message =
-      payload?.error ||
-      payload?.message ||
+      (payload as { error?: string; message?: string } | undefined)?.error ||
+      (payload as { error?: string; message?: string } | undefined)?.message ||
       `Request failed with ${response.status}`;
     throw new Error(message);
   }
@@ -124,11 +149,11 @@ async function requestJsonAtUrl(url, init) {
   return payload;
 }
 
-async function streamDemoMessageAtUrl(url, text, handlers) {
-  // Streaming hardening notes:
-  // - normalize CRLF chunk boundaries before parsing SSE frames
-  // - preserve payload whitespace in `data:` lines
-  // - trust server `done.text` as canonical final assistant output
+async function streamDemoMessageAtUrl(
+  url: string,
+  text: string,
+  handlers: StreamHandlers
+): Promise<{ reply: string }> {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -141,16 +166,14 @@ async function streamDemoMessageAtUrl(url, text, handlers) {
 
   if (!response.ok) {
     const raw = await response.text();
-    let payload;
+    let payload: { error?: string; message?: string } | undefined;
     try {
       payload = raw ? JSON.parse(raw) : undefined;
     } catch {
       payload = undefined;
     }
     const message =
-      payload?.error ||
-      payload?.message ||
-      `Request failed with ${response.status}`;
+      payload?.error || payload?.message || `Request failed with ${response.status}`;
     throw new Error(message);
   }
 
@@ -162,7 +185,7 @@ async function streamDemoMessageAtUrl(url, text, handlers) {
   const decoder = new TextDecoder();
   let buffer = '';
   let fullText = '';
-  let doneText;
+  let doneText: string | undefined;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -196,9 +219,7 @@ async function streamDemoMessageAtUrl(url, text, handlers) {
       }
       if (payload.type === 'error') {
         const message =
-          typeof payload.error === 'string'
-            ? payload.error
-            : 'Streaming failed';
+          typeof payload.error === 'string' ? payload.error : 'Streaming failed';
         handlers.onError?.(message);
         throw new Error(message);
       }
@@ -224,7 +245,15 @@ async function streamDemoMessageAtUrl(url, text, handlers) {
   return { reply: fullText };
 }
 
-function parseSseFrame(frame) {
+type SseFrame = {
+  type?: string;
+  status?: string;
+  delta?: string;
+  text?: string;
+  error?: string;
+};
+
+function parseSseFrame(frame: string): SseFrame | null {
   const dataLines = frame
     .split('\n')
     .filter(line => line.startsWith('data:'))
@@ -232,13 +261,15 @@ function parseSseFrame(frame) {
   if (dataLines.length === 0) return null;
 
   try {
-    return JSON.parse(dataLines.join('\n'));
+    return JSON.parse(dataLines.join('\n')) as SseFrame;
   } catch {
     return null;
   }
 }
 
-function takeNextSseFrame(buffer) {
+function takeNextSseFrame(
+  buffer: string
+): { frame: string; remaining: string } | null {
   const boundary = buffer.indexOf('\n\n');
   if (boundary === -1) return null;
   return {

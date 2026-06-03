@@ -25,8 +25,8 @@
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "changeset:status": "changeset status",
-    "heroku-postbuild": "corepack enable && pnpm install --frozen-lockfile && DOCS_BASE_PATH=/docs/ VITE_BASE_PATH=/app/ pnpm run build && rm -rf dist-static && mkdir -p dist-static && cp -r apps/oss/dist/. dist-static/ && mkdir -p dist-static/app && cp -r apps/ui/dist/. dist-static/app/ && mkdir -p dist-static/docs && cp -r apps/docs/build/. dist-static/docs/",
-    "start": "STATIC_DIR=./dist-static node packages/server/dist/index.js",
+    "heroku-postbuild": "corepack enable && pnpm install --frozen-lockfile && VITE_BASE_PATH=/app/ turbo run build --filter=!@agentscript/oss-site --filter=!@agentscript/docs && rm -rf apps/oss/public/app && mkdir -p apps/oss/public/app && cp -r apps/ui/dist/. apps/oss/public/app/ && pnpm --filter @agentscript/oss-site build",
+    "start": "node apps/oss/.next/standalone/apps/oss/server.js",
     "test:server-path-traversal": "node scripts/test-path-traversal.mjs",
     "prepare": "husky"
   },

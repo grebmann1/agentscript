@@ -1,0 +1,559 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import SiteHeader from '@/components/SiteHeader';
+import SiteFooter from '@/components/SiteFooter';
+import CodeBlock from '@/components/CodeBlock';
+
+export const metadata: Metadata = {
+  title: 'Deploy to Heroku — AgentScript OSS',
+  description:
+    'Deploy AgentScript to Heroku with the official buildpack. Drop a .agent file in a repo, set one env var, push — no local build step.',
+  openGraph: {
+    title: 'Deploy to Heroku — AgentScript OSS',
+    description:
+      'Deploy AgentScript to Heroku with the official buildpack. Drop a .agent file in a repo, set one env var, push — no local build step.',
+    type: 'website',
+  },
+};
+
+const DEPLOY_NAV = [
+  { href: '/#packages', label: 'Packages' },
+  { href: '/#quickstart', label: 'Quickstart' },
+  { href: '/#deploy', label: 'Deploy' },
+  { href: '/docs/', label: 'Docs' },
+];
+
+const REPO_LAYOUT = `my-agent/
+└── support.agent`;
+
+const SUPPORT_AGENT = `config:
+    agent_name: "support"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+
+start_agent main:
+    description: "Replies to greetings."
+    reasoning:
+        instructions: ->
+            | You are a friendly support agent. Greet the user warmly.`;
+
+const MULTI_AGENT_LAYOUT = `my-agent/
+└── agents/
+    ├── support.agent
+    └── billing.agent`;
+
+const ORDER_AGENT = `config:
+    agent_name: "support"
+
+deployment:
+    llm:
+        provider: "openai"
+        model: "gpt-4o-mini"
+        api_key: "env(OPENAI_API_KEY)"
+
+variables:
+    customer_email: mutable string = ""
+    customer_id:    mutable string = ""
+    order_number:   mutable string = ""
+    order_found:    mutable boolean = False
+    order_status:   mutable string = ""
+    tracking_number: mutable string = ""
+    delivery_date:  mutable string = ""
+
+start_agent order_locator:
+    description: "Locate a customer's order."
+
+    actions:
+        Get_Customer_Info:
+            description: "Look up a customer by email."
+            inputs:
+                email: string
+                    is_required: True
+            outputs:
+                customer_found: boolean
+                customer_id:    string
+            target: "fn://GetCustomerInfo"
+
+        Find_Order_By_Number:
+            description: "Find an order by its number."
+            inputs:
+                order_number: string
+                    is_required: True
+                customer_id: string
+            outputs:
+                order_found: boolean
+            target: "fn://FindOrderByNumber"
+
+    reasoning:
+        instructions: ->
+            | Help the customer locate their order. Ask for an order number
+              or email if you don't have one yet.
+
+    after_reasoning:
+        if @variables.customer_email != "":
+            run @actions.Get_Customer_Info
+                with email=@variables.customer_email
+                set @variables.customer_id = @outputs.customer_id
+
+        if @variables.order_number != "":
+            run @actions.Find_Order_By_Number
+                with order_number=@variables.order_number
+                with customer_id=@variables.customer_id
+                set @variables.order_found = @outputs.order_found`;
+
+const DEPLOY_FIVE = `heroku create my-agent
+heroku buildpacks:add https://github.com/salesforce/agentscript-buildpack
+heroku buildpacks:add heroku/nodejs
+heroku config:set OPENAI_API_KEY=sk-...
+git push heroku main`;
+
+const VERSION_PIN = `0.1.0`;
+
+const ENV_EXAMPLE = `OPENAI_API_KEY=`;
+
+const PROCFILE_DEFAULT = `web: AGENTS_DIR=./agents node node_modules/@agentscript/server/dist/index.js`;
+
+const BUILD_LOG = `-----> AgentScript app detected
+-----> Pinning @agentscript/cli@latest
+-----> Installing @agentscript/cli@latest
+-----> Building bundle from /tmp/build_.../agents
+-----> Bundle ready
+       agents:   support
+       env vars: OPENAI_API_KEY
+       Set them with: heroku config:set NAME=value`;
+
+const PS_OUTPUT = `heroku ps -a my-agent
+# === web (Basic): AGENTS_DIR=./agents node ... (1)
+# web.1: up`;
+
+const SESSION_OPEN = `BASE=$(heroku info -s -a my-agent | grep ^web_url | cut -d= -f2)
+
+SID=$(curl -s -X POST "\${BASE}einstein/ai-agent/v1/agents/support/sessions" \\
+  -H 'Content-Type: application/json' \\
+  -d '{
+        "context": {
+          "customer_email": "alice@example.com",
+          "order_number":   "ORD-12345"
+        }
+      }' | jq -r .sessionId)`;
+
+const SESSION_SEND = `curl -s -X POST "\${BASE}einstein/ai-agent/v1/sessions/\${SID}/messages" \\
+  -H 'Content-Type: application/json' \\
+  -d '{"message":{"sequenceId":1,"text":"hello"}}'`;
+
+const FLOW_LOG = `{"event":"flow_call","name":"GetCustomerInfo","args":{"email":"alice@example.com"},"result":{"customer_found":true,...}}
+{"event":"flow_call","name":"FindOrderByNumber","args":{"order_number":"ORD-12345",...},...}
+{"event":"flow_call","name":"GetOrderDetails",...}
+{"event":"flow_call","name":"GetTrackingUpdates",...}`;
+
+const ITERATE = `git add support.agent
+git commit -m "tweak prompt"
+git push heroku main`;
+
+export default function HerokuBuildpackPage() {
+  return (
+    <>
+      <SiteHeader links={DEPLOY_NAV} />
+      <main>
+        <section className="hero">
+          <div className="container">
+            <div className="eyebrow">
+              <span className="dot"></span> Deployment · Heroku buildpack
+            </div>
+            <h1 className="hero-title">
+              Deploy <em>.agent</em> files with one buildpack.
+            </h1>
+            <p className="hero-sub">
+              The AgentScript Heroku buildpack detects <code>.agent</code>{' '}
+              files, scaffolds the Node project around them, and hands off to{' '}
+              <code>heroku/nodejs</code>. <code>git push heroku main</code> is
+              the deployment — no local build step.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Buildpack</p>
+            <h2 className="section-title">What the buildpack does</h2>
+            <p className="section-lead">
+              Four stages run on every push, with zero configuration required.
+              Any <code>package.json</code> or <code>Procfile</code> already
+              committed to the repo is preserved verbatim.
+            </p>
+            <ol>
+              <li>
+                Detects any <code>*.agent</code> file at the repo root or under{' '}
+                <code>agents/</code>.
+              </li>
+              <li>
+                Installs <code>@agentscript/cli</code> from npm (version pinned
+                by an optional <code>.agentscript-version</code> file, default{' '}
+                <code>latest</code>).
+              </li>
+              <li>
+                Runs <code>agentscript build</code> to produce{' '}
+                <code>package.json</code>, <code>Procfile</code>,{' '}
+                <code>agents/*.agent</code>, <code>.env.example</code>, and{' '}
+                <code>agentscript.json</code>.
+              </li>
+              <li>
+                Hands off to <code>heroku/nodejs</code>, which installs
+                dependencies and boots the dyno.
+              </li>
+            </ol>
+          </div>
+        </section>
+
+        <section className="alt">
+          <div className="container">
+            <p className="section-eyebrow">Buildpack</p>
+            <h2 className="section-title">Prerequisites</h2>
+            <p className="section-lead">Two requirements before the first push.</p>
+            <ul>
+              <li>
+                A Heroku account and the <code>heroku</code> CLI (
+                <code>heroku login</code>).
+              </li>
+              <li>
+                An LLM API key for whichever provider the agent's{' '}
+                <code>deployment:</code> block references — OpenAI, Anthropic,
+                Google, or an OpenAI-compatible gateway.
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Buildpack</p>
+            <h2 className="section-title">Minimum repo layout</h2>
+            <p className="section-lead">
+              A deployable repo needs exactly one file: a <code>.agent</code>{' '}
+              with a <code>deployment:</code> block.
+            </p>
+
+            <CodeBlock lang="bash">{REPO_LAYOUT}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              A minimal <code>support.agent</code> looks like this:
+            </p>
+
+            <CodeBlock lang="yaml">{SUPPORT_AGENT}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              Multi-agent repos work the same way — drop several files under{' '}
+              <code>agents/</code>:
+            </p>
+
+            <CodeBlock lang="bash">{MULTI_AGENT_LAYOUT}</CodeBlock>
+          </div>
+        </section>
+
+        <section className="alt">
+          <div className="container">
+            <p className="section-eyebrow">Example</p>
+            <h2 className="section-title">A richer example: order tracking</h2>
+            <p className="section-lead">
+              The server ships with demo <code>fn://</code> handlers (
+              <code>GetCustomerInfo</code>, <code>FindOrderByNumber</code>,{' '}
+              <code>GetOrderDetails</code>, <code>GetTrackingUpdates</code>,{' '}
+              <code>ProcessReturnRequest</code>,{' '}
+              <code>ReportShippingIssue</code>) that simulate an order-tracking
+              backend. Agents whose actions target those names receive
+              realistic mock responses with no backend wiring required.
+            </p>
+
+            <CodeBlock lang="yaml">{ORDER_AGENT}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              <code>after_reasoning run @actions.X</code> blocks fire{' '}
+              <strong>deterministically on the server after each turn</strong>,
+              independent of whether the LLM chose to call any tool. That makes
+              them ideal for normalization, side effects, and cross-topic state
+              plumbing.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Deploy</p>
+            <h2 className="section-title">Deploy in five commands</h2>
+            <p className="section-lead">
+              Buildpack order matters. The AgentScript buildpack must run{' '}
+              <strong>before</strong> <code>heroku/nodejs</code>, since it
+              scaffolds the <code>package.json</code> and <code>Procfile</code>{' '}
+              that <code>heroku/nodejs</code> then consumes.
+            </p>
+
+            <CodeBlock lang="bash">{DEPLOY_FIVE}</CodeBlock>
+          </div>
+        </section>
+
+        <section className="alt">
+          <div className="container">
+            <p className="section-eyebrow">Configuration</p>
+            <h2 className="section-title">
+              Pin a CLI version, set env vars, override the Procfile
+            </h2>
+            <p className="section-lead">
+              Three optional levers for tuning the deploy. Skip them all and
+              the defaults still ship a working agent.
+            </p>
+
+            <h3>Pinning a CLI version</h3>
+            <p>
+              Drop a <code>.agentscript-version</code> file at the repo root
+              to pin a specific CLI version. The buildpack defaults to{' '}
+              <code>latest</code> when the file is absent.
+            </p>
+            <CodeBlock lang="bash">{VERSION_PIN}</CodeBlock>
+
+            <h3 style={{ marginTop: 32 }}>Environment variables</h3>
+            <p>
+              The agent's <code>deployment:</code> block declares the env vars
+              it needs via <code>env(NAME)</code> references. After the first
+              build, the buildpack writes a <code>.env.example</code> listing
+              them. Set each one with <code>heroku config:set</code>.
+            </p>
+            <p>
+              Example <code>.env.example</code> produced from the{' '}
+              <code>support.agent</code> shown earlier:
+            </p>
+            <CodeBlock lang="bash">{ENV_EXAMPLE}</CodeBlock>
+
+            <h3 style={{ marginTop: 32 }}>
+              Custom <code>package.json</code> or <code>Procfile</code>
+            </h3>
+            <p>
+              Either file, when committed, is preserved verbatim. Use this for
+              extra runtime dependencies, a custom dyno command, or a
+              non-default port. The default <code>Procfile</code> is:
+            </p>
+            <CodeBlock lang="bash">{PROCFILE_DEFAULT}</CodeBlock>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Verify</p>
+            <h2 className="section-title">Verifying the deploy</h2>
+            <p className="section-lead">
+              Once <code>git push heroku main</code> completes, the build log
+              should show each buildpack stage in order.
+            </p>
+
+            <CodeBlock lang="bash">{BUILD_LOG}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>Confirm the dyno started:</p>
+
+            <CodeBlock lang="bash">{PS_OUTPUT}</CodeBlock>
+          </div>
+        </section>
+
+        <section className="alt">
+          <div className="container">
+            <p className="section-eyebrow">Smoke test</p>
+            <h2 className="section-title">Smoke-testing the live agent</h2>
+            <p className="section-lead">
+              The deployed server exposes a REST API rooted at{' '}
+              <code>/einstein/ai-agent/v1</code>. Open a session, send a
+              message, inspect the response.
+            </p>
+
+            <h3>Open a session, optionally seeding state</h3>
+            <p>
+              <code>POST /agents/:id/sessions</code> accepts a{' '}
+              <code>context</code> object that pre-populates mutable variables.
+              Seeded state lets deterministic <code>before_reasoning</code> /{' '}
+              <code>after_reasoning</code> <code>run @actions.X</code> blocks
+              fire on the very first turn.
+            </p>
+
+            <CodeBlock lang="bash">{SESSION_OPEN}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              Any name in <code>context</code> that matches a{' '}
+              <code>mutable</code> variable on the agent gets seeded into
+              runtime state. Internal-visibility (<code>mutable</code>) vars
+              are writable; linked (<code>Context</code>) vars are read-only.
+            </p>
+
+            <h3 style={{ marginTop: 32 }}>Send a message</h3>
+
+            <CodeBlock lang="bash">{SESSION_SEND}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              A successful response is HTTP 200 with{' '}
+              <code>messages[].message</code>. With <code>customer_email</code>{' '}
+              and <code>order_number</code> seeded above, the server logs show
+              the deterministic action chain firing:
+            </p>
+
+            <CodeBlock lang="json">{FLOW_LOG}</CodeBlock>
+
+            <p style={{ marginTop: 24 }}>
+              Streaming over SSE is also available at{' '}
+              <code>
+                POST /einstein/ai-agent/v1/sessions/&lt;id&gt;/messages/stream
+              </code>
+              .
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Iterate</p>
+            <h2 className="section-title">Updating the agent</h2>
+            <p className="section-lead">
+              Edit the <code>.agent</code> file and push again. The buildpack
+              rebuilds the bundle, then <code>heroku/nodejs</code> restarts the
+              dyno.
+            </p>
+
+            <CodeBlock lang="bash">{ITERATE}</CodeBlock>
+          </div>
+        </section>
+
+        <section className="alt">
+          <div className="container">
+            <p className="section-eyebrow">Troubleshooting</p>
+            <h2 className="section-title">When something goes wrong</h2>
+            <p className="section-lead">
+              Four common failure modes, with the fix for each.
+            </p>
+
+            <h3>
+              <code>
+                Environment variable "OPENAI_API_KEY" required by
+                deployment.llm.api_key is not set.
+              </code>
+            </h3>
+            <p>
+              The agent declared an env var via <code>env(...)</code> but no
+              matching <code>heroku config:set</code> has been run. Set the
+              var, then <code>heroku ps:restart</code>.
+            </p>
+
+            <h3 style={{ marginTop: 24 }}>
+              Build fails with <code>node: command not found</code>.
+            </h3>
+            <p>
+              The <code>heroku/nodejs</code> buildpack must come{' '}
+              <strong>after</strong> the AgentScript buildpack in{' '}
+              <code>heroku buildpacks</code>. Run <code>heroku buildpacks</code>{' '}
+              to verify the order. If wrong, clear with{' '}
+              <code>heroku buildpacks:clear</code> and re-add in the correct
+              order.
+            </p>
+
+            <h3 style={{ marginTop: 24 }}>
+              Build fails with <code>no .agent file found</code>.
+            </h3>
+            <p>
+              Detection only scans the repo root and <code>agents/</code>.
+              Move the file to one of those locations.
+            </p>
+
+            <h3 style={{ marginTop: 24 }}>
+              Dyno boots but every request returns 404.
+            </h3>
+            <p>
+              The agent's <code>config.agent_name</code> (or{' '}
+              <code>developer_name</code>) is the path segment used by the
+              REST API. With <code>agent_name: "support"</code>, the URL is{' '}
+              <code>/einstein/ai-agent/v1/agents/support/sessions</code>.
+            </p>
+
+            <h3 style={{ marginTop: 24 }}>
+              <code>No fn handler registered for "fn://X"</code>.
+            </h3>
+            <p>
+              The agent script targets <code>fn://X</code> but the server has
+              no handler under that name. Rename the target to one of the
+              bundled mocks (<code>GetCustomerInfo</code>,{' '}
+              <code>FindOrderByNumber</code>, …), or build a custom server
+              image that registers additional <code>FnAdapter</code> handlers.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <div className="container">
+            <p className="section-eyebrow">Reference</p>
+            <h2 className="section-title">What lives where</h2>
+            <p className="section-lead">
+              The files the buildpack reads, writes, or preserves at the repo
+              root.
+            </p>
+
+            <table className="env-table">
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="var">
+                    <code>*.agent</code> or <code>agents/*</code>
+                  </td>
+                  <td className="note">
+                    Source agents (required, at least one)
+                  </td>
+                </tr>
+                <tr>
+                  <td className="var">
+                    <code>.agentscript-version</code>
+                  </td>
+                  <td className="note">Optional CLI version pin</td>
+                </tr>
+                <tr>
+                  <td className="var">
+                    <code>vendor/*.tgz</code>
+                  </td>
+                  <td className="note">
+                    Optional pre-publish: vendored workspace deps
+                  </td>
+                </tr>
+                <tr>
+                  <td className="var">
+                    <code>package.json</code>
+                  </td>
+                  <td className="note">If present, preserved verbatim</td>
+                </tr>
+                <tr>
+                  <td className="var">
+                    <code>Procfile</code>
+                  </td>
+                  <td className="note">If present, preserved verbatim</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <p style={{ marginTop: 32 }}>
+              When the published buildpack isn't an option yet, see{' '}
+              <Link href="/deploy/heroku-script">
+                Heroku via deploy script
+              </Link>{' '}
+              for the vendored-tarball flow. The full pre-publish recipe lives
+              in the{' '}
+              <a href="https://github.com/salesforce/agentscript/tree/main/buildpack/heroku-agentscript">
+                buildpack README on GitHub
+              </a>
+              . Back to <Link href="/deploy">all deploy paths</Link>.
+            </p>
+          </div>
+        </section>
+      </main>
+      <SiteFooter meta="© Salesforce, Inc. · Apache-2.0 · Built by the AgentScript OSS team." />
+    </>
+  );
+}

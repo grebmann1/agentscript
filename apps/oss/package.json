@@ -2,12 +2,30 @@
   "name": "@agentscript/oss-site",
   "version": "0.1.0",
   "private": true,
-  "description": "AgentScript open-source landing site.",
+  "description": "AgentScript open-source landing site (Next.js).",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs",
-    "dev": "node build.mjs --watch",
-    "clean": "rm -rf dist"
+    "dev": "node scripts/copy-static-assets.mjs && next dev -p ${PORT:-4321}",
+    "build": "node scripts/copy-static-assets.mjs && next build && node scripts/prepare-standalone.mjs",
+    "start": "next start -p ${PORT:-4321}",
+    "start:standalone": "node .next/standalone/apps/oss/server.js",
+    "clean": "rm -rf .next public/assets/agents public/app public/docs"
+  },
+  "dependencies": {
+    "@mdx-js/loader": "^3.1.1",
+    "@mdx-js/react": "^3.1.1",
+    "@next/mdx": "^16.2.7",
+    "@types/mdx": "^2.0.13",
+    "next": "^15.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "typescript": "~5.9.3"
   },
   "license": "Apache-2.0"
 }

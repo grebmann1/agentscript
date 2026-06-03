@@ -12,7 +12,7 @@
 
 #### Defined in
 
-[monaco/src/worker-parser.ts:38](https://github.com/salesforce/agentscript/blob/fbe864ab5fc4785e497a92e2c3f6f4575ef8510c/packages/monaco/src/worker-parser.ts#L38)
+[monaco/src/worker-parser.ts:38](https://github.com/salesforce/agentscript/blob/345a16d645d544732e614c1fca12c4a165c02ab0/packages/monaco/src/worker-parser.ts#L38)
 
 ***
 
@@ -22,7 +22,7 @@
 
 #### Defined in
 
-[monaco/src/worker-parser.ts:39](https://github.com/salesforce/agentscript/blob/fbe864ab5fc4785e497a92e2c3f6f4575ef8510c/packages/monaco/src/worker-parser.ts#L39)
+[monaco/src/worker-parser.ts:39](https://github.com/salesforce/agentscript/blob/345a16d645d544732e614c1fca12c4a165c02ab0/packages/monaco/src/worker-parser.ts#L39)
 
 ***
 
@@ -32,4 +32,4 @@
 
 #### Defined in
 
-[monaco/src/worker-parser.ts:37](https://github.com/salesforce/agentscript/blob/fbe864ab5fc4785e497a92e2c3f6f4575ef8510c/packages/monaco/src/worker-parser.ts#L37)
+[monaco/src/worker-parser.ts:37](https://github.com/salesforce/agentscript/blob/345a16d645d544732e614c1fca12c4a165c02ab0/packages/monaco/src/worker-parser.ts#L37)
