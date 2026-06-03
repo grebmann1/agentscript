@@ -1,0 +1,15 @@
+{
+  "name": "__AGENT_BUNDLE_NAME__",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "AGENTS_DIR=./agents node node_modules/@agentscript/server/dist/index.js"
+  },
+  "dependencies": {
+    "@agentscript/server": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

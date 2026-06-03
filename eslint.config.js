@@ -42,6 +42,7 @@ export default [
         projectService: {
           allowDefaultProject: [
             'packages/agentforce/tests/*.test.ts',
+            'packages/cli/test/*.test.ts',
             'packages/compiler/modality/test/*.test.ts',
             'packages/lsp/src/*.test.ts',
             'packages/lsp/src/adapters/*.test.ts',
