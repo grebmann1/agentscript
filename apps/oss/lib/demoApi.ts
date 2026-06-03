@@ -1,10 +1,10 @@
-export type StreamHandlers = {
+export interface StreamHandlers {
   onStatus?: (status: string) => void;
   onDelta?: (delta: string, full: string) => void;
   onDone?: (full: string) => void;
   onError?: (message: string) => void;
   signal?: AbortSignal;
-};
+}
 
 declare global {
   interface Window {
@@ -173,7 +173,9 @@ async function streamDemoMessageAtUrl(
       payload = undefined;
     }
     const message =
-      payload?.error || payload?.message || `Request failed with ${response.status}`;
+      payload?.error ||
+      payload?.message ||
+      `Request failed with ${response.status}`;
     throw new Error(message);
   }
 
@@ -219,7 +221,9 @@ async function streamDemoMessageAtUrl(
       }
       if (payload.type === 'error') {
         const message =
-          typeof payload.error === 'string' ? payload.error : 'Streaming failed';
+          typeof payload.error === 'string'
+            ? payload.error
+            : 'Streaming failed';
         handlers.onError?.(message);
         throw new Error(message);
       }
@@ -245,13 +249,13 @@ async function streamDemoMessageAtUrl(
   return { reply: fullText };
 }
 
-type SseFrame = {
+interface SseFrame {
   type?: string;
   status?: string;
   delta?: string;
   text?: string;
   error?: string;
-};
+}
 
 function parseSseFrame(frame: string): SseFrame | null {
   const dataLines = frame

@@ -1,13 +1,11 @@
 'use client';
 
 export default function CopyButton({ source }: { source: string }) {
-  const onClick = async () => {
-    try {
-      await navigator.clipboard.writeText(source);
-      flashToast('Copied');
-    } catch {
-      flashToast('Copy failed');
-    }
+  const onClick = () => {
+    navigator.clipboard
+      .writeText(source)
+      .then(() => flashToast('Copied'))
+      .catch(() => flashToast('Copy failed'));
   };
 
   return (

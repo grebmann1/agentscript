@@ -7,13 +7,13 @@ import {
   streamDemoMessage,
 } from '@/lib/demoApi';
 
-type Msg = {
+interface Msg {
   id: number;
   kind: 'user' | 'assistant';
   text: string;
   pending?: boolean;
   error?: boolean;
-};
+}
 
 const INITIAL_GREETING =
   'Hi! I can help you plan a trip — search flights and hotels, then book them. Try the prefilled prompt below or write your own.';
@@ -163,7 +163,7 @@ export default function DemoChat() {
             type="button"
             className="btn primary"
             data-demo-start
-            onClick={onStart}
+            onClick={() => void onStart()}
             disabled={busy}
           >
             Start new session
@@ -172,7 +172,7 @@ export default function DemoChat() {
             type="button"
             className="btn"
             data-demo-end
-            onClick={onEnd}
+            onClick={() => void onEnd()}
             disabled={!sessionId || busy}
           >
             End session
@@ -183,7 +183,7 @@ export default function DemoChat() {
             data-demo-view-script
             aria-expanded={scriptOpen}
             aria-controls="demo-script-panel"
-            onClick={onToggleScript}
+            onClick={() => void onToggleScript()}
           >
             {scriptOpen ? 'Hide script' : 'View script'}
           </button>
@@ -220,7 +220,11 @@ export default function DemoChat() {
         )}
       </div>
 
-      <form className="demo-compose" data-demo-compose onSubmit={onSubmit}>
+      <form
+        className="demo-compose"
+        data-demo-compose
+        onSubmit={ev => void onSubmit(ev)}
+      >
         <input
           type="text"
           name="message"
@@ -268,9 +272,7 @@ export default function DemoChat() {
           </a>
         </div>
         <pre className="demo-script-source">
-          <code data-demo-script-code>
-            {scriptText ?? 'Loading script…'}
-          </code>
+          <code data-demo-script-code>{scriptText ?? 'Loading script…'}</code>
         </pre>
       </div>
     </div>

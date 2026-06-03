@@ -1,6 +1,9 @@
 import Link from 'next/link';
 
-type NavLink = { href: string; label: string };
+interface NavLink {
+  href: string;
+  label: string;
+}
 
 const DEFAULT_LINKS: NavLink[] = [
   { href: '/#paths', label: 'Deploy paths' },

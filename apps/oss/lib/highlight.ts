@@ -5,25 +5,82 @@
  */
 
 export type TokenKind = 'k' | 's' | 'n' | 'c' | 'f' | 'p' | 't';
-export type Token = { kind?: TokenKind; text: string };
+export interface Token {
+  kind?: TokenKind;
+  text: string;
+}
 
 const TS_KEYWORDS = new Set([
-  'import', 'from', 'export', 'const', 'let', 'var', 'function', 'return',
-  'async', 'await', 'class', 'new', 'if', 'else', 'for', 'while', 'of', 'in',
-  'as', 'type', 'interface', 'extends', 'implements', 'this', 'true', 'false',
-  'null', 'undefined', 'void', 'try', 'catch', 'finally', 'throw', 'default',
-  'switch', 'case', 'break', 'continue', 'public', 'private', 'protected',
-  'readonly', 'static',
+  'import',
+  'from',
+  'export',
+  'const',
+  'let',
+  'var',
+  'function',
+  'return',
+  'async',
+  'await',
+  'class',
+  'new',
+  'if',
+  'else',
+  'for',
+  'while',
+  'of',
+  'in',
+  'as',
+  'type',
+  'interface',
+  'extends',
+  'implements',
+  'this',
+  'true',
+  'false',
+  'null',
+  'undefined',
+  'void',
+  'try',
+  'catch',
+  'finally',
+  'throw',
+  'default',
+  'switch',
+  'case',
+  'break',
+  'continue',
+  'public',
+  'private',
+  'protected',
+  'readonly',
+  'static',
 ]);
 
 const AGENT_KEYWORDS = new Set([
-  'agent', 'tool', 'on_message', 'description', 'let', 'reply', 'return',
-  'string', 'number', 'boolean',
+  'agent',
+  'tool',
+  'on_message',
+  'description',
+  'let',
+  'reply',
+  'return',
+  'string',
+  'number',
+  'boolean',
 ]);
 
 const BASH_KEYWORDS = new Set([
-  'curl', 'pnpm', 'npm', 'node', 'heroku', 'git', 'cd', 'export', 'sudo',
-  'echo', 'jq',
+  'curl',
+  'pnpm',
+  'npm',
+  'node',
+  'heroku',
+  'git',
+  'cd',
+  'export',
+  'sudo',
+  'echo',
+  'jq',
 ]);
 
 function tokenizeTs(src: string): Token[] {
