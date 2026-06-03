@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Script from 'next/script';
+import PocBanner from '@/components/PocBanner';
 import StickyHeader from '@/components/StickyHeader';
 import './globals.css';
 
@@ -39,6 +40,7 @@ export default function RootLayout({
         </Script>
       </head>
       <body>
+        <PocBanner />
         {children}
         <StickyHeader />
       </body>

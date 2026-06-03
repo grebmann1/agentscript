@@ -1,0 +1,53 @@
+name: POC feedback
+description: Share feedback about the AgentScript OSS proof of concept (the live demo, docs site, or SDK).
+title: "[POC feedback] "
+labels: ["poc-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the AgentScript OSS POC. Your feedback shapes what we
+        ship next. The more concrete you can be (which page, which command,
+        what you expected), the faster we can act on it.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: What part of the POC is this about?
+      options:
+        - Landing site / demo chat
+        - Heroku deployment flow
+        - SDK / runtime API
+        - Documentation
+        - .agent dialect / authoring experience
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what you tried and what you saw.
+      placeholder: "I tried to deploy a multi-agent server and…"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      placeholder: "I expected the second agent to be reachable at /einstein/…/agents/billing/sessions"
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Versions / runtimes / OS, if relevant.
+      placeholder: "@agentscript/server 0.1.5, Node 22.x, macOS 15"
+    validations:
+      required: false
+  - type: checkboxes
+    id: contact
+    attributes:
+      label: Follow-up
+      options:
+        - label: I'm open to a quick chat to dig into this further.

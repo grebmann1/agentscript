@@ -32,7 +32,10 @@ export default function SiteFooter({
           <div>
             <a href="https://github.com/salesforce/agentscript">GitHub</a> ·{' '}
             <a href="/docs/">Docs</a> ·{' '}
-            <a href="https://www.npmjs.com/org/agentscript">npm</a> ·{' '}
+            <a href="https://github.com/salesforce/agentscript/issues/new?template=poc-feedback.yml">
+              Feedback
+            </a>{' '}
+            · <a href="https://www.npmjs.com/org/agentscript">npm</a> ·{' '}
             <a href="https://github.com/salesforce/agentscript/blob/main/LICENSE.txt">
               License
             </a>

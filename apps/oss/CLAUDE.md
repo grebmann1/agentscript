@@ -39,6 +39,13 @@ under `app/docs/**/page.mdx`. MDX is wired through `@next/mdx` in
 (`pre > code`) to the existing `components/CodeBlock.tsx` so MDX-authored
 code keeps the same token-highlighter rendering as the JSX deploy pages.
 
+## POC banner
+
+`components/PocBanner.tsx` is rendered at the top of `<body>` (before
+`<StickyHeader />`) so it sits above the sticky header. It is dismissable
+and persists the choice in `localStorage` under the key
+`agentscript-poc-banner-dismissed`.
+
 ## Highlighter is server-rendered
 
 `components/CodeBlock.tsx` calls `tokenize()` from `lib/highlight.ts` at

@@ -100,6 +100,55 @@ a:hover { color: var(--brand-hover); text-decoration: underline; }
   padding: 0 var(--pad-x);
 }
 
+/* ---------- POC banner ---------- */
+
+.poc-banner {
+  background: var(--brand);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.poc-banner-inner {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 8px var(--pad-x);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.poc-banner-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.poc-banner-text { flex: 1; }
+.poc-banner a {
+  color: #fff;
+  text-decoration: underline;
+}
+.poc-banner a:hover { color: rgba(255, 255, 255, 0.85); }
+.poc-banner-dismiss {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.poc-banner-dismiss:hover { background: rgba(255, 255, 255, 0.18); }
+@media (max-width: 480px) {
+  .poc-banner-text { display: none; }
+}
+
 /* ---------- Header ---------- */
 
 .site-header {
