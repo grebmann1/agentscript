@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir> <env-dir>
+# Run agentscript build inside the dyno's build environment, then leave a
+# package.json + Procfile + agents/ layout that heroku/nodejs can finish.
+set -euo pipefail
+
+BUILD_DIR="${1:?build-dir argument required}"
+CACHE_DIR="${2:?cache-dir argument required}"
+# env-dir is unused for now (no secrets needed at compile time), but accept it
+# so Heroku's invocation contract is satisfied.
+ENV_DIR="${3:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+VERSION="$(bp_resolve_version "$BUILD_DIR")"
+APP_NAME="$(basename "$BUILD_DIR")"
+NPM_PREFIX="$CACHE_DIR/agentscript/npm-prefix-$VERSION"
+BUNDLE_DIR="$CACHE_DIR/agentscript/bundle-$$"
+
+bp_log "AgentScript app detected"
+bp_log "Pinning @agentscript/cli@$VERSION"
+
+# Heroku doesn't guarantee node is on PATH before heroku/nodejs runs. We rely
+# on the build image's vendored node (24.x on heroku-24) to install the CLI.
+if ! command -v node >/dev/null 2>&1; then
+  echo "       node not found on PATH. Add heroku/nodejs to the buildpack chain *before* this one fails." >&2
+  echo "       Or use a stack image that ships Node." >&2
+  exit 1
+fi
+
+mkdir -p "$NPM_PREFIX" "$BUNDLE_DIR"
+export NPM_CONFIG_PREFIX="$NPM_PREFIX"
+export PATH="$NPM_PREFIX/bin:$PATH"
+
+if [ -n "${AGENTSCRIPT_CLI_BIN:-}" ]; then
+  bp_log "Using injected agentscript CLI ($AGENTSCRIPT_CLI_BIN)"
+elif [ ! -x "$NPM_PREFIX/bin/agentscript" ]; then
+  bp_log "Installing @agentscript/cli@$VERSION"
+  npm install --silent --global "@agentscript/cli@$VERSION" 2>&1 | bp_indent
+else
+  bp_log "Reusing cached @agentscript/cli@$VERSION"
+fi
+
+AGENTSCRIPT_BIN="${AGENTSCRIPT_CLI_BIN:-agentscript}"
+
+# Pick the input: prefer agents/ if it exists, otherwise the build dir itself.
+if [ -d "$BUILD_DIR/agents" ]; then
+  INPUT="$BUILD_DIR/agents"
+else
+  INPUT="$BUILD_DIR"
+fi
+
+bp_log "Building bundle from $INPUT"
+"$AGENTSCRIPT_BIN" build "$INPUT" --out "$BUNDLE_DIR" --name "$APP_NAME" 2>&1 | bp_indent
+
+# Move generated files into BUILD_DIR. Never overwrite a user-committed
+# package.json or Procfile — they may have customizations.
+copy_if_absent() {
+  local src="$1" dest="$2"
+  if [ -e "$src" ] && [ ! -e "$dest" ]; then
+    cp "$src" "$dest"
+  fi
+}
+
+copy_if_absent "$BUNDLE_DIR/package.json" "$BUILD_DIR/package.json"
+copy_if_absent "$BUNDLE_DIR/Procfile"     "$BUILD_DIR/Procfile"
+
+# .env.example and agentscript.json are buildpack-owned — always replace.
+cp -f "$BUNDLE_DIR/.env.example"    "$BUILD_DIR/.env.example"
+cp -f "$BUNDLE_DIR/agentscript.json" "$BUILD_DIR/agentscript.json"
+
+# Ensure agents/ ends up under build-dir root regardless of the input shape.
+mkdir -p "$BUILD_DIR/agents"
+cp -f "$BUNDLE_DIR/agents/"*.agent "$BUILD_DIR/agents/"
+
+# README from the template is informational only — skip it; the user's repo
+# may already contain their own README.
+
+rm -rf "$BUNDLE_DIR"
+
+AGENTS_LIST="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$BUILD_DIR/agentscript.json','utf8')).agents.join(', '))")"
+ENV_LIST="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$BUILD_DIR/agentscript.json','utf8')).envVars.join(', ') || '(none)')")"
+
+bp_log "Bundle ready"
+echo "       agents:   $AGENTS_LIST"   | bp_indent
+echo "       env vars: $ENV_LIST"      | bp_indent
+echo "       Set them with: heroku config:set NAME=value" | bp_indent

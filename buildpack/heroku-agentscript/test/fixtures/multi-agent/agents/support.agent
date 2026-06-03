@@ -1,0 +1,14 @@
+config:
+    agent_name: "support"
+
+deployment:
+    llm:
+        provider: "anthropic"
+        model: "claude-haiku-4-5"
+        api_key: "env(ANTHROPIC_API_KEY)"
+
+start_agent main:
+    description: "Support agent."
+    reasoning:
+        instructions: ->
+            | Hello.

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# bin/detect <build-dir>
+# Exit 0 + print buildpack name when AgentScript sources are present.
+# Exit 1 silently otherwise so the next buildpack in the chain can try.
+set -euo pipefail
+
+BUILD_DIR="${1:?build-dir argument required}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+if bp_has_agent_files "$BUILD_DIR"; then
+  echo "AgentScript"
+  exit 0
+fi
+
+exit 1

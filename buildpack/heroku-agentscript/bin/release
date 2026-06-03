@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# bin/release <build-dir>
+# The Procfile copied during compile is the source of truth. Provide a default
+# process type as a safety net in case it's missing.
+set -euo pipefail
+
+cat <<'YAML'
+---
+default_process_types:
+  web: AGENTS_DIR=./agents node node_modules/@agentscript/server/dist/index.js
+YAML

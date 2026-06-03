@@ -1,0 +1,12 @@
+{
+  "name": "user-owned",
+  "version": "9.9.9",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "echo 'user-owned start'"
+  },
+  "dependencies": {
+    "@agentscript/server": "^0.1.0"
+  }
+}
