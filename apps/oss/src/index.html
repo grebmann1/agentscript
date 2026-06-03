@@ -91,6 +91,47 @@
         </div>
       </section>
 
+      <section id="demo">
+        <div class="container">
+          <p class="section-eyebrow">Live demo</p>
+          <h2 class="section-title">Try a real agent — right here.</h2>
+          <p class="section-lead">
+            This chat is talking to <code>agents/mcp_demo.agent</code> running
+            on a Heroku dyno. The agent has three MCP tools —
+            <code>search_flights</code>, <code>search_hotels</code>, and
+            <code>book_trip</code> — and streams its replies back over SSE.
+            Try the prefilled prompt or write your own.
+          </p>
+
+          <div class="demo-chat" data-prefill="Find me a flight from San Francisco to New York on 2026-07-15 and a hotel for 3 nights.">
+            <div class="demo-chat-head">
+              <div>
+                <h3 class="demo-chat-title">Live Demo Chat</h3>
+                <p class="demo-chat-meta" data-role="meta">No active session</p>
+              </div>
+              <div class="demo-chat-actions">
+                <button type="button" class="btn primary" data-action="start">Start new session</button>
+                <button type="button" class="btn" data-action="end" disabled>End session</button>
+              </div>
+            </div>
+
+            <div class="demo-chat-log" data-role="log" aria-live="polite"></div>
+
+            <form class="demo-chat-form" data-role="form">
+              <input
+                type="text"
+                class="demo-chat-input"
+                data-role="input"
+                placeholder="Find me a flight from San Francisco to New York on 2026-07-15 and a hotel for 3 nights."
+                autocomplete="off"
+                disabled
+              />
+              <button type="submit" class="btn primary" data-action="send" disabled>Send</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
       <section id="packages">
         <div class="container">
           <p class="section-eyebrow">Packages</p>
@@ -327,6 +368,10 @@ git push heroku main</code></pre>
       </div>
     </footer>
 
+    <script>
+      window.AGENTSCRIPT_DEMO_API_BASE = 'https://agentscript-runner-demo-43272b107f3c.herokuapp.com';
+    </script>
     <script type="module" src="./assets/site.js"></script>
+    <script type="module" src="./assets/demo-chat.js"></script>
   </body>
 </html>
