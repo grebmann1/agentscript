@@ -4,46 +4,48 @@ import {
   streamDemoMessage,
 } from './demo-agent-api.js';
 
-const root = document.querySelector('.demo-chat');
+const root = document.querySelector('[data-demo-chat]');
 if (root) {
   initDemoChat(root);
 }
 
 function initDemoChat(el) {
-  const log = el.querySelector('[data-role="log"]');
-  const meta = el.querySelector('[data-role="meta"]');
-  const form = el.querySelector('[data-role="form"]');
-  const input = el.querySelector('[data-role="input"]');
-  const startBtn = el.querySelector('[data-action="start"]');
-  const endBtn = el.querySelector('[data-action="end"]');
-  const sendBtn = el.querySelector('[data-action="send"]');
-  const prefill = el.dataset.prefill ?? '';
+  const log = el.querySelector('[data-demo-log]');
+  const status = el.querySelector('[data-demo-status]');
+  const errorEl = el.querySelector('[data-demo-error]');
+  const form = el.querySelector('[data-demo-compose]');
+  const input = el.querySelector('[data-demo-input]');
+  const startBtn = el.querySelector('[data-demo-start]');
+  const endBtn = el.querySelector('[data-demo-end]');
+  const sendBtn = el.querySelector('[data-demo-send]');
+  const viewScriptBtn = el.querySelector('[data-demo-view-script]');
+  const scriptPanel = el.querySelector('[data-demo-script-panel]');
+  const scriptCode = el.querySelector('[data-demo-script-code]');
 
   let sessionId = null;
   let busy = false;
-
-  renderEmpty();
+  let scriptLoaded = false;
 
   startBtn.addEventListener('click', async () => {
     if (busy) return;
     setBusy(true, 'Starting session…');
+    clearError();
     try {
       if (sessionId) await safeEnd(sessionId);
       const { sessionId: id } = await startDemoSession();
       sessionId = id;
-      log.innerHTML = '';
+      clearLog();
       appendAssistant(
         'Hi! I can help you plan a trip — search flights and hotels, then book them. Try the prefilled prompt below or write your own.'
       );
-      meta.textContent = `Session ${shortId(id)}`;
+      status.textContent = `Session ${shortId(id)}`;
       input.disabled = false;
       sendBtn.disabled = false;
       endBtn.disabled = false;
-      input.value = prefill;
       input.focus();
     } catch (error) {
-      meta.textContent = 'Failed to start session';
-      appendError(messageOf(error));
+      status.textContent = 'Failed to start session';
+      showError(messageOf(error));
     } finally {
       setBusy(false);
     }
@@ -55,7 +57,7 @@ function initDemoChat(el) {
     try {
       await safeEnd(sessionId);
       sessionId = null;
-      meta.textContent = 'No active session';
+      status.textContent = 'No active session';
       input.disabled = true;
       sendBtn.disabled = true;
       endBtn.disabled = true;
@@ -72,13 +74,14 @@ function initDemoChat(el) {
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    clearError();
     appendUser(text);
     const pending = appendAssistant('Thinking…', { pending: true });
     setBusy(true);
     try {
       await streamDemoMessage(sessionId, text, {
-        onStatus: status => {
-          pending.bubble.textContent = `${status}…`;
+        onStatus: s => {
+          pending.bubble.textContent = `${s}…`;
         },
         onDelta: (_delta, full) => {
           pending.el.classList.remove('pending');
@@ -98,24 +101,65 @@ function initDemoChat(el) {
       pending.el.classList.add('error');
       pending.el.classList.remove('pending');
       pending.bubble.textContent = messageOf(error);
+      showError(messageOf(error));
     } finally {
       setBusy(false);
       input.focus();
     }
   });
 
+  if (viewScriptBtn && scriptPanel && scriptCode) {
+    viewScriptBtn.addEventListener('click', async () => {
+      const open = !scriptPanel.hasAttribute('hidden');
+      if (open) {
+        scriptPanel.setAttribute('hidden', '');
+        viewScriptBtn.setAttribute('aria-expanded', 'false');
+        viewScriptBtn.textContent = 'View script';
+        return;
+      }
+      scriptPanel.removeAttribute('hidden');
+      viewScriptBtn.setAttribute('aria-expanded', 'true');
+      viewScriptBtn.textContent = 'Hide script';
+      if (!scriptLoaded) {
+        try {
+          const res = await fetch('./assets/agents/mcp_demo.agent');
+          if (!res.ok) throw new Error(`Failed to load script (${res.status})`);
+          scriptCode.textContent = await res.text();
+          scriptLoaded = true;
+        } catch (error) {
+          scriptCode.textContent = `// ${messageOf(error)}`;
+        }
+      }
+    });
+  }
+
   function setBusy(value, statusText) {
     busy = value;
     sendBtn.disabled = value || !sessionId;
-    if (statusText) meta.textContent = statusText;
+    if (statusText) status.textContent = statusText;
+  }
+
+  function showError(msg) {
+    if (!errorEl) return;
+    errorEl.textContent = msg;
+    errorEl.removeAttribute('hidden');
+  }
+  function clearError() {
+    if (!errorEl) return;
+    errorEl.textContent = '';
+    errorEl.setAttribute('hidden', '');
+  }
+
+  function clearLog() {
+    while (log.firstChild) log.removeChild(log.firstChild);
   }
 
   function renderEmpty() {
-    log.innerHTML = '';
-    const empty = document.createElement('div');
-    empty.className = 'demo-chat-empty';
+    clearLog();
+    const empty = document.createElement('p');
+    empty.className = 'demo-empty';
     empty.textContent =
-      'Click "Start new session" to spin up a fresh conversation with the demo agent.';
+      'Start a session, then ask the agent to search flights, search hotels, and book a trip via MCP tools.';
     log.appendChild(empty);
   }
 
@@ -125,21 +169,17 @@ function initDemoChat(el) {
   function appendAssistant(text, opts = {}) {
     return appendMessage('assistant', 'ASSISTANT', text, opts);
   }
-  function appendError(text) {
-    const msg = appendMessage('assistant', 'ASSISTANT', text);
-    msg.el.classList.add('error');
-    return msg;
-  }
 
   function appendMessage(kind, role, text, opts = {}) {
-    if (log.querySelector('.demo-chat-empty')) log.innerHTML = '';
+    const empty = log.querySelector('.demo-empty');
+    if (empty) empty.remove();
     const wrapper = document.createElement('div');
-    wrapper.className = `demo-chat-msg ${kind}${opts.pending ? ' pending' : ''}`;
+    wrapper.className = `demo-msg ${kind}${opts.pending ? ' pending' : ''}`;
     const roleEl = document.createElement('span');
-    roleEl.className = 'demo-chat-role';
+    roleEl.className = 'demo-role';
     roleEl.textContent = role;
     const bubble = document.createElement('div');
-    bubble.className = 'demo-chat-bubble';
+    bubble.className = 'demo-bubble';
     bubble.textContent = text;
     wrapper.appendChild(roleEl);
     wrapper.appendChild(bubble);
@@ -166,10 +206,11 @@ function messageOf(error) {
   return typeof error === 'string' ? error : 'Something went wrong.';
 }
 
-// Render a tiny subset of Markdown safely: bold (**x**), inline `code`,
-// bullet lists, and paragraph breaks. Anything else falls through as text.
+// Render a tiny subset of Markdown safely by building DOM nodes — never
+// inserting any string as HTML. Supports bold (**x**), inline `code`, bullet
+// lists, and paragraph breaks. Everything else is plain text.
 function renderMarkdown(target, source) {
-  target.innerHTML = '';
+  while (target.firstChild) target.removeChild(target.firstChild);
   const lines = source.split('\n');
   let listEl = null;
   let paragraph = [];
@@ -177,7 +218,7 @@ function renderMarkdown(target, source) {
   const flushParagraph = () => {
     if (!paragraph.length) return;
     const p = document.createElement('div');
-    p.innerHTML = inline(paragraph.join(' '));
+    appendInline(p, paragraph.join(' '));
     target.appendChild(p);
     paragraph = [];
   };
@@ -196,7 +237,7 @@ function renderMarkdown(target, source) {
         target.appendChild(listEl);
       }
       const li = document.createElement('li');
-      li.innerHTML = inline(line.replace(/^\s*[-*]\s+/, ''));
+      appendInline(li, line.replace(/^\s*[-*]\s+/, ''));
       listEl.appendChild(li);
       continue;
     }
@@ -205,23 +246,35 @@ function renderMarkdown(target, source) {
   }
   flushParagraph();
 
-  // Empty result fallback.
   if (!target.childNodes.length) {
     target.textContent = source;
   }
 }
 
-function inline(text) {
-  return escapeHtml(text)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-}
-
-function escapeHtml(s) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+// Walk a string, emit text nodes for plain runs and <strong>/<code> elements
+// for inline markers. No HTML parsing, no innerHTML — every literal
+// character from the source ends up as a Text node.
+function appendInline(target, text) {
+  const tokenRe = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  let lastIndex = 0;
+  for (const m of text.matchAll(tokenRe)) {
+    if (m.index > lastIndex) {
+      target.appendChild(
+        document.createTextNode(text.slice(lastIndex, m.index))
+      );
+    }
+    if (m[1] !== undefined) {
+      const strong = document.createElement('strong');
+      strong.textContent = m[1];
+      target.appendChild(strong);
+    } else if (m[2] !== undefined) {
+      const code = document.createElement('code');
+      code.textContent = m[2];
+      target.appendChild(code);
+    }
+    lastIndex = m.index + m[0].length;
+  }
+  if (lastIndex < text.length) {
+    target.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
 }

@@ -31,6 +31,17 @@ async function build() {
   await rm(OUT, { recursive: true, force: true });
   await mkdir(OUT, { recursive: true });
   await cp(SRC, OUT, { recursive: true });
+
+  // Ship the canonical demo agent so the live-demo widget can fetch and
+  // render it client-side without leaving the OSS site.
+  const demoAgentSrc = resolve(
+    __dirname,
+    '../../packages/server/agents/mcp_demo.agent'
+  );
+  const demoAgentOut = join(OUT, 'assets', 'agents', 'mcp_demo.agent');
+  await mkdir(dirname(demoAgentOut), { recursive: true });
+  await cp(demoAgentSrc, demoAgentOut);
+
   await writeFile(join(OUT, 'robots.txt'), ROBOTS);
   await writeFile(join(OUT, 'sitemap.xml'), SITEMAP);
   console.log(`[oss] built → ${OUT}`);
